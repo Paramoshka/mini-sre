@@ -38,9 +38,34 @@ func New(cfg Config) (*AgentClient, error) {
 }
 
 func (c *AgentClient) Chat(ctx context.Context, req Request) (*Response, error) {
-	messages, err := messageParams(req.Messages)
+	params, err := c.buildParams(req)
 	if err != nil {
 		return nil, err
+	}
+
+	completion, err := c.client.Chat.Completions.New(ctx, params, c.thinkingOption())
+	if err != nil {
+		return nil, fmt.Errorf("agent: chat: %w", err)
+	}
+	if len(completion.Choices) == 0 {
+		return nil, errors.New("agent: chat: response has no choices")
+	}
+
+	choice := completion.Choices[0]
+	return &Response{
+		ID:               completion.ID,
+		Model:            completion.Model,
+		Content:          choice.Message.Content,
+		ReasoningContent: extraString(choice.Message.JSON.ExtraFields, "reasoning_content"),
+		FinishReason:     choice.FinishReason,
+		Usage:            usageFrom(completion.Usage),
+	}, nil
+}
+
+func (c *AgentClient) buildParams(req Request) (openai.ChatCompletionNewParams, error) {
+	messages, err := messageParams(req.Messages)
+	if err != nil {
+		return openai.ChatCompletionNewParams{}, err
 	}
 
 	params := openai.ChatCompletionNewParams{
@@ -64,32 +89,22 @@ func (c *AgentClient) Chat(ctx context.Context, req Request) (*Response, error) 
 		params.MaxTokens = openai.Int(int64(maxTokens))
 	}
 
-	completion, err := c.client.Chat.Completions.New(ctx, params,
-		option.WithJSONSet("thinking", map[string]string{"type": string(c.cfg.Thinking)}),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("agent: chat: %w", err)
-	}
-	if len(completion.Choices) == 0 {
-		return nil, errors.New("agent: chat: response has no choices")
-	}
+	return params, nil
+}
 
-	choice := completion.Choices[0]
-	return &Response{
-		ID:               completion.ID,
-		Model:            completion.Model,
-		Content:          choice.Message.Content,
-		ReasoningContent: extraString(choice.Message.JSON.ExtraFields, "reasoning_content"),
-		FinishReason:     choice.FinishReason,
-		Usage: Usage{
-			PromptTokens:     completion.Usage.PromptTokens,
-			CompletionTokens: completion.Usage.CompletionTokens,
-			TotalTokens:      completion.Usage.TotalTokens,
-			CacheHitTokens:   extraInt64(completion.Usage.JSON.ExtraFields, "prompt_cache_hit_tokens"),
-			CacheMissTokens:  extraInt64(completion.Usage.JSON.ExtraFields, "prompt_cache_miss_tokens"),
-			ReasoningTokens:  completion.Usage.CompletionTokensDetails.ReasoningTokens,
-		},
-	}, nil
+func (c *AgentClient) thinkingOption() option.RequestOption {
+	return option.WithJSONSet("thinking", map[string]string{"type": string(c.cfg.Thinking)})
+}
+
+func usageFrom(raw openai.CompletionUsage) Usage {
+	return Usage{
+		PromptTokens:     raw.PromptTokens,
+		CompletionTokens: raw.CompletionTokens,
+		TotalTokens:      raw.TotalTokens,
+		CacheHitTokens:   extraInt64(raw.JSON.ExtraFields, "prompt_cache_hit_tokens"),
+		CacheMissTokens:  extraInt64(raw.JSON.ExtraFields, "prompt_cache_miss_tokens"),
+		ReasoningTokens:  raw.CompletionTokensDetails.ReasoningTokens,
+	}
 }
 
 func messageParams(messages []Message) ([]openai.ChatCompletionMessageParamUnion, error) {

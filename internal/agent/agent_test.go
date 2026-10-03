@@ -45,11 +45,15 @@ const completionJSONNoCache = `{
 }`
 
 type requestBody struct {
-	Model       string        `json:"model"`
-	Messages    []messageBody `json:"messages"`
-	Temperature *float64      `json:"temperature"`
-	MaxTokens   *int          `json:"max_tokens"`
-	Thinking    struct {
+	Model         string        `json:"model"`
+	Messages      []messageBody `json:"messages"`
+	Temperature   *float64      `json:"temperature"`
+	MaxTokens     *int          `json:"max_tokens"`
+	Stream        bool          `json:"stream"`
+	StreamOptions struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options"`
+	Thinking struct {
 		Type string `json:"type"`
 	} `json:"thinking"`
 }

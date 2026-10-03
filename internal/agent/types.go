@@ -72,6 +72,12 @@ type Request struct {
 	MaxTokens   *int
 }
 
+type Chunk struct {
+	Content          string
+	ReasoningContent string
+	FinishReason     string
+}
+
 type Usage struct {
 	PromptTokens     int64
 	CompletionTokens int64

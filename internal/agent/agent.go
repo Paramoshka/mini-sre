@@ -115,7 +115,7 @@ func messageParams(messages []Message) ([]openai.ChatCompletionMessageParamUnion
 
 func extraInt64(fields map[string]respjson.Field, key string) int64 {
 	field, ok := fields[key]
-	if !ok || !field.Valid() {
+	if !ok || field.Raw() == "" || field.Raw() == respjson.Null {
 		return 0
 	}
 	var value int64
@@ -127,7 +127,7 @@ func extraInt64(fields map[string]respjson.Field, key string) int64 {
 
 func extraString(fields map[string]respjson.Field, key string) string {
 	field, ok := fields[key]
-	if !ok || !field.Valid() {
+	if !ok || field.Raw() == "" || field.Raw() == respjson.Null {
 		return ""
 	}
 	var value string

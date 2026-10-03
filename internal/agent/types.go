@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://api.deepseek.com"
-	DefaultModel   = "deepseek-flash"
-	DefaultTimeout = 60 * time.Second
+	DefaultBaseURL    = "https://api.deepseek.com"
+	DefaultModel      = "deepseek-flash"
+	DefaultTimeout    = 60 * time.Second
+	DefaultMaxRetries = 2
 )
 
 type ThinkingMode string
@@ -24,6 +25,7 @@ type Config struct {
 	Model       string
 	Temperature *float64
 	MaxTokens   int
+	MaxRetries  *int
 	Thinking    ThinkingMode
 	Timeout     time.Duration
 }
@@ -43,6 +45,10 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Timeout == 0 {
 		c.Timeout = DefaultTimeout
+	}
+	if c.MaxRetries == nil {
+		n := DefaultMaxRetries
+		c.MaxRetries = &n
 	}
 	return c
 }

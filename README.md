@@ -43,8 +43,10 @@ go build -o mini-sre ./cmd
 | `-reasoning` | `false` | print `reasoning_content` to stderr |
 | `-stream` | `true` | print the answer as it is generated |
 
-The key is read from the `DEEPSEEK_API_KEY` environment variable only, never from
-arguments. `.env` files are not loaded automatically.
+The key is read from the `DEEPSEEK_API_KEY` environment variable, never from
+arguments. On startup the CLI loads `.env` from the current directory if present;
+real environment variables take precedence over the file. A malformed `.env`
+aborts startup.
 
 ## REPL commands
 

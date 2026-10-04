@@ -12,6 +12,7 @@ import (
 
 	"mini-sre/internal/agent"
 	"mini-sre/internal/cli"
+	"mini-sre/internal/dotenv"
 	"mini-sre/internal/tools"
 )
 
@@ -42,6 +43,10 @@ func run() error {
 	}
 	if *thinking {
 		cfg.Thinking = agent.ThinkingEnabled
+	}
+
+	if err := dotenv.Load(".env"); err != nil {
+		return err
 	}
 
 	client, err := agent.New(cfg)

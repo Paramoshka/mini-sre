@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"mini-sre/internal/agent"
 	"mini-sre/internal/cli"
+	"mini-sre/internal/tools"
 )
 
 func main() {
@@ -58,10 +60,40 @@ func run() error {
 		SystemPrompt: cli.DefaultSystemPrompt,
 		Stream:       *stream,
 		Reasoning:    *reasoning,
+		Tools:        toolSpecs(),
+		RunTool:      toolRunner(),
 	}
 
 	if args := flag.Args(); len(args) > 0 {
 		return app.Ask(ctx, strings.Join(args, " "))
 	}
 	return app.Run(ctx)
+}
+
+func toolSpecs() []agent.Tool {
+	specs := tools.Specs()
+	out := make([]agent.Tool, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, agent.Tool{
+			Name:        spec.Name,
+			Description: spec.Description,
+			Parameters:  spec.Parameters,
+		})
+	}
+	return out
+}
+
+func toolRunner() func(ctx context.Context, call agent.ToolCall) (string, error) {
+	registry := tools.Registry()
+	return func(ctx context.Context, call agent.ToolCall) (string, error) {
+		run, ok := registry[call.Name]
+		if !ok {
+			return "", fmt.Errorf("unknown tool %q", call.Name)
+		}
+		var args json.RawMessage
+		if call.Arguments != "" {
+			args = json.RawMessage(call.Arguments)
+		}
+		return run(ctx, args)
+	}
 }

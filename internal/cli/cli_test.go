@@ -33,9 +33,25 @@ const completionBody = `{
   "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 3}
 }`
 
+const toolCallStream = `data: {"id":"chat-t","object":"chat.completion.chunk","created":1,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_load_average","arguments":"{}"}}]},"finish_reason":null}]}
+
+data: {"id":"chat-t","object":"chat.completion.chunk","created":1,"model":"deepseek-flash","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+`
+
 type messageJSON struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	ToolCallID string `json:"tool_call_id"`
+	ToolCalls  []struct {
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
 }
 
 type recorder struct {
@@ -154,6 +170,128 @@ func TestAskRollsBackHistoryOnError(t *testing.T) {
 	}
 	if len(app.history) != 1 || app.history[0].Role != agent.RoleSystem {
 		t.Errorf("history = %+v, want only system message", app.history)
+	}
+}
+
+func TestAskRunsTools(t *testing.T) {
+	var mu sync.Mutex
+	var requests [][]messageJSON
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []messageJSON `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		requests = append(requests, req.Messages)
+		requestCount++
+		n := requestCount
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 1 {
+			io.WriteString(w, toolCallStream)
+			return
+		}
+		io.WriteString(w, streamBody)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := agent.New(agent.Config{APIKey: "test-key", BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	var calls []agent.ToolCall
+	app := &App{
+		Client: client,
+		Out:    &out,
+		Err:    &errOut,
+		Stream: true,
+		Tools:  []agent.Tool{{Name: "get_load_average", Description: "load"}},
+		RunTool: func(_ context.Context, call agent.ToolCall) (string, error) {
+			calls = append(calls, call)
+			return "load average: 0.10 0.05 0.01 (running 1/450)", nil
+		},
+	}
+
+	if err := app.Ask(context.Background(), "load?"); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	if len(calls) != 1 || calls[0].Name != "get_load_average" || calls[0].Arguments != "{}" {
+		t.Errorf("tool calls = %+v, want single get_load_average", calls)
+	}
+	if !strings.Contains(errOut.String(), "→ get_load_average({})") {
+		t.Errorf("stderr = %q, want tool call line", errOut.String())
+	}
+	if !strings.Contains(out.String(), "hello world") {
+		t.Errorf("stdout = %q, want final answer", out.String())
+	}
+
+	if len(app.history) != 5 {
+		t.Fatalf("history = %d messages, want 5", len(app.history))
+	}
+	if app.history[2].Role != agent.RoleAssistant || len(app.history[2].ToolCalls) != 1 {
+		t.Errorf("history[2] = %+v, want assistant with tool call", app.history[2])
+	}
+	if app.history[3].Role != agent.RoleTool || app.history[3].ToolCallID != "call_1" {
+		t.Errorf("history[3] = %+v, want tool result for call_1", app.history[3])
+	}
+	if app.history[4].Role != agent.RoleAssistant || app.history[4].Content != "hello world" {
+		t.Errorf("history[4] = %+v, want final assistant answer", app.history[4])
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if requestCount != 2 {
+		t.Fatalf("requests = %d, want 2", requestCount)
+	}
+	second := requests[1]
+	if len(second) != 4 {
+		t.Fatalf("second request messages = %d, want 4", len(second))
+	}
+	if len(second[2].ToolCalls) != 1 || second[2].ToolCalls[0].ID != "call_1" {
+		t.Errorf("second request assistant = %+v, want tool call", second[2])
+	}
+	if second[3].Role != "tool" || second[3].ToolCallID != "call_1" || second[3].Content == "" {
+		t.Errorf("second request tool message = %+v, want result", second[3])
+	}
+}
+
+func TestAskToolRoundsExceeded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, toolCallStream)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := agent.New(agent.Config{APIKey: "test-key", BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	app := &App{
+		Client: client,
+		Out:    &out,
+		Err:    &errOut,
+		Stream: true,
+		RunTool: func(_ context.Context, call agent.ToolCall) (string, error) {
+			return "ok", nil
+		},
+	}
+
+	err = app.Ask(context.Background(), "loop")
+	if err == nil || !strings.Contains(err.Error(), "tool rounds exceeded") {
+		t.Fatalf("Ask error = %v, want tool rounds exceeded", err)
+	}
+	if len(app.history) != 1 || app.history[0].Role != agent.RoleSystem {
+		t.Errorf("history = %+v, want rolled back to system message", app.history)
 	}
 }
 

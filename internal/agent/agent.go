@@ -10,6 +10,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/respjson"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 type AgentClient struct {
@@ -58,6 +59,7 @@ func (c *AgentClient) Chat(ctx context.Context, req Request) (*Response, error) 
 		Content:          choice.Message.Content,
 		ReasoningContent: extraString(choice.Message.JSON.ExtraFields, "reasoning_content"),
 		FinishReason:     choice.FinishReason,
+		ToolCalls:        toolCallsFrom(choice.Message.ToolCalls),
 		Usage:            usageFrom(completion.Usage),
 	}, nil
 }
@@ -88,6 +90,12 @@ func (c *AgentClient) buildParams(req Request) (openai.ChatCompletionNewParams, 
 	if maxTokens > 0 {
 		params.MaxTokens = openai.Int(int64(maxTokens))
 	}
+
+	tools, err := toolParams(req.Tools)
+	if err != nil {
+		return openai.ChatCompletionNewParams{}, err
+	}
+	params.Tools = tools
 
 	return params, nil
 }
@@ -120,12 +128,90 @@ func messageParams(messages []Message) ([]openai.ChatCompletionMessageParamUnion
 		case RoleUser:
 			params = append(params, openai.UserMessage(m.Content))
 		case RoleAssistant:
-			params = append(params, openai.AssistantMessage(m.Content))
+			params = append(params, assistantMessage(m))
+		case RoleTool:
+			if m.ToolCallID == "" {
+				return nil, fmt.Errorf("agent: chat: message %d: tool message requires tool_call_id", i)
+			}
+			params = append(params, openai.ToolMessage(m.Content, m.ToolCallID))
 		default:
 			return nil, fmt.Errorf("agent: chat: message %d has unknown role %q", i, m.Role)
 		}
 	}
 	return params, nil
+}
+
+func assistantMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	var assistant openai.ChatCompletionAssistantMessageParam
+
+	if m.Content != "" || len(m.ToolCalls) == 0 {
+		assistant.Content.OfString = openai.String(m.Content)
+	}
+	if len(m.ToolCalls) > 0 {
+		assistant.ToolCalls = make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(m.ToolCalls))
+		for _, call := range m.ToolCalls {
+			assistant.ToolCalls = append(assistant.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+				OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+					ID: call.ID,
+					Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+						Name:      call.Name,
+						Arguments: call.Arguments,
+					},
+				},
+			})
+		}
+	}
+	if m.ReasoningContent != "" {
+		assistant.SetExtraFields(map[string]any{"reasoning_content": m.ReasoningContent})
+	}
+
+	return openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant}
+}
+
+func toolParams(tools []Tool) ([]openai.ChatCompletionToolUnionParam, error) {
+	if len(tools) == 0 {
+		return nil, nil
+	}
+
+	params := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
+	for i, t := range tools {
+		if t.Name == "" {
+			return nil, fmt.Errorf("agent: tool %d: name is required", i)
+		}
+
+		definition := shared.FunctionDefinitionParam{Name: t.Name}
+		if t.Description != "" {
+			definition.Description = openai.String(t.Description)
+		}
+		if len(t.Parameters) > 0 {
+			var parameters shared.FunctionParameters
+			if err := json.Unmarshal(t.Parameters, &parameters); err != nil {
+				return nil, fmt.Errorf("agent: tool %q: invalid parameters schema: %w", t.Name, err)
+			}
+			definition.Parameters = parameters
+		}
+
+		params = append(params, openai.ChatCompletionToolUnionParam{
+			OfFunction: &openai.ChatCompletionFunctionToolParam{Function: definition},
+		})
+	}
+	return params, nil
+}
+
+func toolCallsFrom(calls []openai.ChatCompletionMessageToolCallUnion) []ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	out := make([]ToolCall, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, ToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+		})
+	}
+	return out
 }
 
 func extraInt64(fields map[string]respjson.Field, key string) int64 {

@@ -13,6 +13,7 @@ import (
 const (
 	DefaultSystemPrompt = "You are mini-sre, a concise SRE assistant running on a Linux host."
 	prompt              = "mini-sre> "
+	maxToolRounds       = 5
 )
 
 type Chatter interface {
@@ -28,6 +29,8 @@ type App struct {
 	SystemPrompt string
 	Stream       bool
 	Reasoning    bool
+	Tools        []agent.Tool
+	RunTool      func(ctx context.Context, call agent.ToolCall) (string, error)
 
 	history []agent.Message
 	usage   agent.Usage
@@ -63,25 +66,64 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) Ask(ctx context.Context, input string) error {
 	a.ensureHistory()
 
+	base := len(a.history)
 	a.history = append(a.history, agent.Message{Role: agent.RoleUser, Content: input})
-	resp, err := a.turn(ctx)
-	if err != nil {
-		a.history = a.history[:len(a.history)-1]
-		return err
+
+	for range maxToolRounds {
+		resp, err := a.turn(ctx)
+		if err != nil {
+			a.history = a.history[:base]
+			return err
+		}
+
+		assistant := agent.Message{
+			Role:             agent.RoleAssistant,
+			Content:          resp.Content,
+			ReasoningContent: resp.ReasoningContent,
+			ToolCalls:        resp.ToolCalls,
+		}
+		a.history = append(a.history, assistant)
+
+		if len(resp.ToolCalls) == 0 {
+			return nil
+		}
+
+		for _, call := range resp.ToolCalls {
+			fmt.Fprintf(a.Err, "→ %s(%s)\n", call.Name, call.Arguments)
+			result, err := a.runTool(ctx, call)
+			if err != nil {
+				result = "error: " + err.Error()
+			}
+			a.history = append(a.history, agent.Message{
+				Role:       agent.RoleTool,
+				Content:    result,
+				ToolCallID: call.ID,
+			})
+		}
 	}
-	a.history = append(a.history, agent.Message{Role: agent.RoleAssistant, Content: resp.Content})
-	return nil
+
+	a.history = a.history[:base]
+	return fmt.Errorf("agent: tool rounds exceeded %d", maxToolRounds)
+}
+
+func (a *App) runTool(ctx context.Context, call agent.ToolCall) (string, error) {
+	if a.RunTool == nil {
+		return "", fmt.Errorf("no tool executor configured")
+	}
+	return a.RunTool(ctx, call)
 }
 
 func (a *App) turn(ctx context.Context) (*agent.Response, error) {
-	req := agent.Request{Messages: a.history}
+	req := agent.Request{Messages: a.history, Tools: a.Tools}
 
 	if !a.Stream {
 		resp, err := a.Client.Chat(ctx, req)
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintln(a.Out, resp.Content)
+		if resp.Content != "" {
+			fmt.Fprintln(a.Out, resp.Content)
+		}
 		a.usage = resp.Usage
 		a.printUsage()
 		return resp, nil
@@ -93,6 +135,7 @@ func (a *App) turn(ctx context.Context) (*agent.Response, error) {
 	}
 
 	reasoningOpen := false
+	wroteContent := false
 	for chunk, err := range stream.Chunks() {
 		if err != nil {
 			return nil, err
@@ -107,12 +150,15 @@ func (a *App) turn(ctx context.Context) (*agent.Response, error) {
 				reasoningOpen = false
 			}
 			fmt.Fprint(a.Out, chunk.Content)
+			wroteContent = true
 		}
 	}
 	if reasoningOpen {
 		fmt.Fprintln(a.Err)
 	}
-	fmt.Fprintln(a.Out)
+	if wroteContent {
+		fmt.Fprintln(a.Out)
+	}
 
 	resp := stream.Response()
 	a.usage = resp.Usage

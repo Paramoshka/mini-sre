@@ -44,6 +44,27 @@ const completionJSONNoCache = `{
   "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
 }`
 
+const completionWithToolCalls = `{
+  "id": "chat-3",
+  "object": "chat.completion",
+  "created": 1735689600,
+  "model": "deepseek-flash",
+  "choices": [{
+    "index": 0,
+    "finish_reason": "tool_calls",
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [{
+        "id": "call_9",
+        "type": "function",
+        "function": {"name": "get_disk_usage", "arguments": "{\"path\":\"/\"}"}
+      }]
+    }
+  }],
+  "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+}`
+
 type requestBody struct {
 	Model         string        `json:"model"`
 	Messages      []messageBody `json:"messages"`
@@ -53,14 +74,32 @@ type requestBody struct {
 	StreamOptions struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
+	Tools []struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			Parameters  map[string]any `json:"parameters"`
+		} `json:"function"`
+	} `json:"tools"`
 	Thinking struct {
 		Type string `json:"type"`
 	} `json:"thinking"`
 }
 
 type messageBody struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content"`
+	ToolCallID       string `json:"tool_call_id"`
+	ToolCalls        []struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
 }
 
 type capture struct {
@@ -302,6 +341,99 @@ func TestChatResponseWithoutCacheFields(t *testing.T) {
 	}
 }
 
+func TestChatWithToolsRequest(t *testing.T) {
+	var cap capture
+	client := newTestClient(t, Config{}, jsonHandler(&cap, completionJSON))
+
+	_, err := client.Chat(context.Background(), Request{
+		Messages: []Message{
+			{Role: RoleSystem, Content: "sys"},
+			{Role: RoleUser, Content: "load?"},
+			{
+				Role:             RoleAssistant,
+				ReasoningContent: "need loadavg",
+				ToolCalls:        []ToolCall{{ID: "call_1", Name: "get_load_average", Arguments: "{}"}},
+			},
+			{Role: RoleTool, Content: "load average: 0.1", ToolCallID: "call_1"},
+		},
+		Tools: []Tool{{
+			Name:        "get_load_average",
+			Description: "Get load average",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	got := cap.snapshot()
+	if len(got.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(got.requests))
+	}
+	req := got.requests[0]
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(req.Tools))
+	}
+	if req.Tools[0].Type != "function" || req.Tools[0].Function.Name != "get_load_average" {
+		t.Errorf("tool = %+v, want function get_load_average", req.Tools[0])
+	}
+	if req.Tools[0].Function.Description != "Get load average" {
+		t.Errorf("tool description = %q", req.Tools[0].Function.Description)
+	}
+	if req.Tools[0].Function.Parameters["type"] != "object" {
+		t.Errorf("tool parameters = %+v, want object schema", req.Tools[0].Function.Parameters)
+	}
+
+	if len(req.Messages) != 4 {
+		t.Fatalf("messages = %d, want 4", len(req.Messages))
+	}
+	assistant := req.Messages[2]
+	if assistant.Role != "assistant" {
+		t.Errorf("messages[2].Role = %q, want assistant", assistant.Role)
+	}
+	if assistant.Content != "" {
+		t.Errorf("messages[2].Content = %q, want omitted", assistant.Content)
+	}
+	if assistant.ReasoningContent != "need loadavg" {
+		t.Errorf("messages[2].ReasoningContent = %q, want %q", assistant.ReasoningContent, "need loadavg")
+	}
+	if len(assistant.ToolCalls) != 1 {
+		t.Fatalf("messages[2].ToolCalls = %d, want 1", len(assistant.ToolCalls))
+	}
+	call := assistant.ToolCalls[0]
+	if call.ID != "call_1" || call.Type != "function" || call.Function.Name != "get_load_average" || call.Function.Arguments != "{}" {
+		t.Errorf("tool call = %+v, want call_1/get_load_average/{}", call)
+	}
+
+	tool := req.Messages[3]
+	if tool.Role != "tool" || tool.ToolCallID != "call_1" || tool.Content != "load average: 0.1" {
+		t.Errorf("messages[3] = %+v, want tool result for call_1", tool)
+	}
+}
+
+func TestChatResponseToolCalls(t *testing.T) {
+	var cap capture
+	client := newTestClient(t, Config{}, jsonHandler(&cap, completionWithToolCalls))
+
+	resp, err := client.Chat(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "disk?"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "tool_calls")
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(resp.ToolCalls))
+	}
+	call := resp.ToolCalls[0]
+	if call.ID != "call_9" || call.Name != "get_disk_usage" || call.Arguments != `{"path":"/"}` {
+		t.Errorf("ToolCall = %+v, want call_9/get_disk_usage", call)
+	}
+}
+
 func TestChatValidation(t *testing.T) {
 	var cap capture
 	client := newTestClient(t, Config{}, jsonHandler(&cap, completionJSON))
@@ -313,6 +445,17 @@ func TestChatValidation(t *testing.T) {
 		Messages: []Message{{Role: "unknown", Content: "ping"}},
 	}); err == nil {
 		t.Error("Chat(unknown role) = nil error, want error")
+	}
+	if _, err := client.Chat(context.Background(), Request{
+		Messages: []Message{{Role: RoleTool, Content: "result"}},
+	}); err == nil {
+		t.Error("Chat(tool message without tool_call_id) = nil error, want error")
+	}
+	if _, err := client.Chat(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "ping"}},
+		Tools:    []Tool{{Name: "broken", Parameters: json.RawMessage(`{bad`)}},
+	}); err == nil {
+		t.Error("Chat(invalid tool schema) = nil error, want error")
 	}
 	if got := cap.snapshot(); len(got.requests) != 0 {
 		t.Errorf("requests = %d, want 0", len(got.requests))

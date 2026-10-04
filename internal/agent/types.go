@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"time"
 )
@@ -59,17 +60,34 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 type Message struct {
-	Role    Role
-	Content string
+	Role             Role
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall
+	ToolCallID       string
+}
+
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+type Tool struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
 }
 
 type Request struct {
 	Messages    []Message
 	Temperature *float64
 	MaxTokens   *int
+	Tools       []Tool
 }
 
 type Chunk struct {
@@ -93,5 +111,6 @@ type Response struct {
 	Content          string
 	ReasoningContent string
 	FinishReason     string
+	ToolCalls        []ToolCall
 	Usage            Usage
 }

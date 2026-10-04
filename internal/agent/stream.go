@@ -44,6 +44,7 @@ func (s *Stream) Chunks() iter.Seq2[Chunk, error] {
 					ReasoningContent: extraString(choice.Delta.JSON.ExtraFields, "reasoning_content"),
 					FinishReason:     choice.FinishReason,
 				}
+				s.mergeToolCalls(choice.Delta.ToolCalls)
 			}
 			s.accumulate(raw, chunk)
 			if !yield(chunk, nil) {
@@ -74,5 +75,21 @@ func (s *Stream) accumulate(raw openai.ChatCompletionChunk, chunk Chunk) {
 	}
 	if raw.JSON.Usage.Valid() {
 		s.resp.Usage = usageFrom(raw.Usage)
+	}
+}
+
+func (s *Stream) mergeToolCalls(deltas []openai.ChatCompletionChunkChoiceDeltaToolCall) {
+	for _, delta := range deltas {
+		index := int(delta.Index)
+		for len(s.resp.ToolCalls) <= index {
+			s.resp.ToolCalls = append(s.resp.ToolCalls, ToolCall{})
+		}
+
+		call := &s.resp.ToolCalls[index]
+		if delta.ID != "" {
+			call.ID = delta.ID
+		}
+		call.Name += delta.Function.Name
+		call.Arguments += delta.Function.Arguments
 	}
 }

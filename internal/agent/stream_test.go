@@ -30,6 +30,16 @@ data: [DONE]
 
 `
 
+const streamToolCalls = `data: {"id":"chat-4","object":"chat.completion.chunk","created":1735689600,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_disk_usage","arguments":"{\"path\":"}}]},"finish_reason":null}]}
+
+data: {"id":"chat-4","object":"chat.completion.chunk","created":1735689600,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"/\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chat-4","object":"chat.completion.chunk","created":1735689600,"model":"deepseek-flash","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+data: [DONE]
+
+`
+
 func sseHandler(cap *capture, payload string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, err := cap.record(r); err != nil {
@@ -113,6 +123,36 @@ func TestChatStream(t *testing.T) {
 	}
 	if got.requests[0].Thinking.Type != string(ThinkingDisabled) {
 		t.Errorf("thinking.type = %q, want %q", got.requests[0].Thinking.Type, ThinkingDisabled)
+	}
+}
+
+func TestChatStreamToolCalls(t *testing.T) {
+	var cap capture
+	client := newTestClient(t, Config{}, sseHandler(&cap, streamToolCalls))
+
+	stream, err := client.ChatStream(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "disk?"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+
+	for _, err := range stream.Chunks() {
+		if err != nil {
+			t.Fatalf("Chunks: %v", err)
+		}
+	}
+
+	resp := stream.Response()
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "tool_calls")
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(resp.ToolCalls))
+	}
+	call := resp.ToolCalls[0]
+	if call.ID != "call_1" || call.Name != "get_disk_usage" || call.Arguments != `{"path":"/"}` {
+		t.Errorf("ToolCall = %+v, want call_1/get_disk_usage with joined arguments", call)
 	}
 }
 

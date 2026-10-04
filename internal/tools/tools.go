@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"syscall"
 )
@@ -54,36 +53,17 @@ func LoadAverage(_ context.Context) (string, error) {
 
 func formatLoadAverage(raw string) (string, error) {
 	fields := strings.Fields(raw)
-	if len(fields) < 4 {
+	if len(fields) < 3 {
 		return "", fmt.Errorf("tools: unexpected /proc/loadavg format: %q", raw)
 	}
 
-	for _, value := range fields[:3] {
-		if _, err := strconv.ParseFloat(value, 64); err != nil {
-			return "", fmt.Errorf("tools: parse load average %q: %w", value, err)
+	out := fmt.Sprintf("load average: %s %s %s", fields[0], fields[1], fields[2])
+	if len(fields) >= 4 {
+		if procs := strings.SplitN(fields[3], "/", 2); len(procs) == 2 {
+			out += fmt.Sprintf(" (running %s/%s)", procs[0], procs[1])
 		}
 	}
-
-	procs := strings.SplitN(fields[3], "/", 2)
-	if len(procs) != 2 {
-		return "", fmt.Errorf("tools: unexpected running/total %q", fields[3])
-	}
-	for _, value := range procs {
-		if _, err := strconv.Atoi(value); err != nil {
-			return "", fmt.Errorf("tools: parse running/total %q: %w", fields[3], err)
-		}
-	}
-
-	lastPID := ""
-	if len(fields) >= 5 {
-		if _, err := strconv.Atoi(fields[4]); err != nil {
-			return "", fmt.Errorf("tools: parse last pid %q: %w", fields[4], err)
-		}
-		lastPID = ", last pid " + fields[4]
-	}
-
-	return fmt.Sprintf("load average: %s %s %s (running %s/%s%s)",
-		fields[0], fields[1], fields[2], procs[0], procs[1], lastPID), nil
+	return out, nil
 }
 
 func DiskUsage(_ context.Context, path string) (string, error) {

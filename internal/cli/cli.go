@@ -38,16 +38,34 @@ type App struct {
 
 func (a *App) Run(ctx context.Context) error {
 	a.ensureSession()
+	if closer, ok := a.In.(io.Closer); ok {
+		stop := context.AfterFunc(ctx, func() {
+			// Best effort: closing input releases a blocked read; Run returns the context error.
+			_ = closer.Close()
+		})
+		defer func() {
+			if ctx.Err() == nil {
+				stop()
+			}
+		}()
+	}
 
 	scanner := bufio.NewScanner(a.In)
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fmt.Fprint(a.Out, prompt)
-		if !scanner.Scan() {
+		text, err := scanLine(ctx, scanner)
+		if err == io.EOF {
 			fmt.Fprintln(a.Out)
-			return scanner.Err()
+			return nil
+		}
+		if err != nil {
+			return err
 		}
 
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(text)
 		if line == "" {
 			continue
 		}
@@ -60,6 +78,34 @@ func (a *App) Run(ctx context.Context) error {
 		if err := a.Ask(ctx, line); err != nil {
 			fmt.Fprintf(a.Err, "error: %v\n", err)
 		}
+	}
+}
+
+func scanLine(ctx context.Context, scanner *bufio.Scanner) (string, error) {
+	type result struct {
+		text string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		if scanner.Scan() {
+			done <- result{text: scanner.Text()}
+			return
+		}
+		err := scanner.Err()
+		if err == nil {
+			err = io.EOF
+		}
+		done <- result{err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-done:
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return r.text, r.err
 	}
 }
 

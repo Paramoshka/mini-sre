@@ -96,7 +96,10 @@ func run() error {
 	if args := flag.Args(); len(args) > 0 {
 		return app.Ask(ctx, strings.Join(args, " "))
 	}
-	return app.Run(ctx)
+	if err := app.Run(ctx); err != nil && ctx.Err() == nil {
+		return err
+	}
+	return nil
 }
 
 func toolSpecs() []agent.Tool {

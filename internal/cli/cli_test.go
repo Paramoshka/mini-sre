@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"mini-sre/internal/agent"
 )
@@ -367,5 +369,61 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 	if got := len(rec.snapshot()); got != 0 {
 		t.Errorf("requests = %d, want 0", got)
+	}
+}
+
+type blockedInput struct {
+	io.ReadCloser
+	started  chan struct{}
+	finished chan struct{}
+}
+
+func (r *blockedInput) Read(p []byte) (int, error) {
+	close(r.started)
+	defer close(r.finished)
+	return r.ReadCloser.Read(p)
+}
+
+func TestRunCancelsBlockedInput(t *testing.T) {
+	reader, writer := io.Pipe()
+	input := &blockedInput{ReadCloser: reader, started: make(chan struct{}), finished: make(chan struct{})}
+	defer input.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app := &App{In: input, Out: io.Discard, Err: io.Discard}
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	select {
+	case <-input.started:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not start reading input")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run stayed blocked on input after cancellation")
+	}
+	select {
+	case <-input.finished:
+	case <-time.After(time.Second):
+		t.Fatal("input read was not released after cancellation")
+	}
+}
+
+func TestRunReportsInputError(t *testing.T) {
+	input, writer := io.Pipe()
+	defer input.Close()
+	want := errors.New("input failed")
+	if err := writer.CloseWithError(want); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{In: input, Out: io.Discard, Err: io.Discard}
+	if err := app.Run(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Run error = %v, want %v", err, want)
 	}
 }

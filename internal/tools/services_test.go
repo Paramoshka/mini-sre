@@ -42,7 +42,7 @@ func TestServiceStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.backend+tt.stdout, func(t *testing.T) {
 			argsFile := fakeCommand(t, tt.command, tt.stdout, "", "0")
-			out, err := (&Tools{Runner: &remote.Runner{}}).ServiceStatus(context.Background(), "local", "nginx", tt.backend)
+			out, err := (&Tools{Runner: &remote.Runner{}}).ServiceStatus(context.Background(), "local", ServiceTarget{Name: "nginx", Backend: tt.backend})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("status=%q err=%v", out, err)
 			}
@@ -57,8 +57,10 @@ func TestServiceStatus(t *testing.T) {
 				if !strings.Contains(string(args), "--format={{json .State}}\n") || !strings.HasSuffix(string(args), "--\nnginx\n") {
 					t.Fatalf("unsafe or wrong Docker inspect: %s", args)
 				}
-			} else if !strings.HasSuffix(string(args), "--\nnginx.service\n") {
-				t.Fatalf("wrong systemd unit: %s", args)
+			} else {
+				if !strings.HasSuffix(string(args), "--\nnginx.service\n") || strings.Contains(string(args), "--user\n") {
+					t.Fatalf("wrong systemd unit or default scope: %s", args)
+				}
 			}
 		})
 	}
@@ -94,6 +96,32 @@ func TestServiceLogs(t *testing.T) {
 	}
 }
 
+func TestUserSystemdStatusAndLogs(t *testing.T) {
+	for _, tool := range []string{"get_service_status", "get_service_logs"} {
+		t.Run(tool, func(t *testing.T) {
+			program, output := "systemctl", "LoadState=loaded\nActiveState=active\n"
+			if tool == "get_service_logs" {
+				program, output = "journalctl", "bot started\n"
+			}
+			argsFile := fakeCommand(t, program, output, "", "0")
+			out, err := Registry(&remote.Runner{})[tool](context.Background(), json.RawMessage(`{"service":"mini-sre","scope":"user"}`))
+			if err != nil || out != output {
+				t.Fatalf("user service: out=%q err=%v", out, err)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(args), "--user\n") {
+				t.Fatalf("command does not select the user manager/journal: %s", args)
+			}
+			if tool == "get_service_logs" && !strings.Contains(string(args), "--user-unit=mini-sre.service\n") {
+				t.Fatalf("journal does not select the user unit: %s", args)
+			}
+		})
+	}
+}
+
 func TestLogErrorsAndValidation(t *testing.T) {
 	argsFile := fakeCommand(t, "journalctl", "", "permission denied: secret", "1")
 	r := &remote.Runner{Config: config.Config{Hosts: map[string]config.Host{"web": {Password: "secret"}}}}
@@ -102,6 +130,8 @@ func TestLogErrorsAndValidation(t *testing.T) {
 		`{"lines":0}`, `{"lines":501}`, `{"since_minutes":-1}`, `{"backend":"docker"}`,
 		`{"backend":"openrc"}`, `{"service":"-all"}`, `{"service":"nginx*"}`, `{"service":"a; touch file"}`,
 		`{"lines":"secret"}`, `{"command":"rm"}`, `[]`, `null`, `{} {}`, `{bad`,
+		`{"scope":"all"}`, `{"scope":"--user"}`, `{"backend":"docker","service":"web","scope":"user"}`,
+		`{"backend":"docker","service":"web","scope":"system"}`,
 	} {
 		if _, err := call(context.Background(), json.RawMessage(raw)); err == nil {
 			t.Fatalf("invalid arguments accepted: %s", raw)
@@ -113,6 +143,25 @@ func TestLogErrorsAndValidation(t *testing.T) {
 	_, err := call(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("permission error or redaction: %v", err)
+	}
+}
+
+func TestSystemdJournalScope(t *testing.T) {
+	for _, scope := range []string{"system", "user"} {
+		t.Run(scope, func(t *testing.T) {
+			argsFile := fakeCommand(t, "journalctl", "log entry\n", "", "0")
+			out, err := Registry(&remote.Runner{})["get_service_logs"](context.Background(), json.RawMessage(`{"scope":"`+scope+`"}`))
+			if err != nil || out != "log entry\n" {
+				t.Fatalf("general journal: out=%q err=%v", out, err)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(args), "--user\n") != (scope == "user") || strings.Contains(string(args), "--unit=") || strings.Contains(string(args), "--user-unit=") {
+				t.Fatalf("wrong journal scope or unexpected unit filter: %s", args)
+			}
+		})
 	}
 }
 

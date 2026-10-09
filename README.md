@@ -94,8 +94,8 @@ All probes except `list_hosts` accept `host_id`, defaulting to `local`.
 | `list_hosts` | none | list configured IDs and `local` |
 | `get_load_average` | none | load for 1, 5, 15 minutes and process counts |
 | `get_disk_usage` | `path`, default `/` | total, used, available bytes formatted as human-readable sizes |
-| `get_service_status` | required `service`; `backend`, default `systemd` | systemd unit state or Docker container `.State` |
-| `get_service_logs` | `service`, `backend`, `lines`, `since_minutes` | recent journal or container logs |
+| `get_service_status` | required `service`; `backend`, default `systemd`; `scope`, default `system` | systemd unit state or Docker container `.State` |
+| `get_service_logs` | `service`, `backend`, `scope`, `lines`, `since_minutes` | recent journal or container logs |
 
 `backend` is `systemd` or `docker`, selected per request. Systemd names may omit
 the `.service` suffix; Docker targets are container names or IDs, not Compose or
@@ -103,6 +103,14 @@ Swarm service names. An inactive/failed unit or exited container is a valid
 status result. Missing services, unavailable commands/daemons and permission
 errors are reported explicitly. For systemd logs, omit `service` to read the
 general journal. Docker logs require a container.
+
+For systemd, `scope` is `system` (default) or `user`. User scope selects the
+service manager and journal of the local process user or the configured SSH
+user. It requires that user's systemd manager to be available. To inspect the
+agent installed with the example user unit, use
+`{"host_id":"local","service":"mini-sre","scope":"user"}` with either service
+tool. Omit `service` with `scope=user` to read that user's general journal.
+Docker does not accept `scope`.
 
 Logs default to the last 100 records from the last 60 minutes. `lines` must be
 1..500 and `since_minutes` must be positive. Both stdout and stderr logs are
@@ -194,6 +202,7 @@ Layout:
 - `internal/cli` - REPL, one-shot, streaming console output;
 - `internal/session` - shared history and agent loop (up to 5 tool call rounds, then a final answer without tools);
 - `internal/tools` - probes and their JSON schemas for the model;
+  `load.go`, `disk.go`, `service.go` contain the individual probes;
 - `internal/config`, `internal/remote` - YAML hosts and local/SSH command execution;
 - `internal/telegram` - Bot API polling, authorization and chat sessions;
 - `cmd/main.go` - flags and wiring.

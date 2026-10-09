@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"mini-sre/internal/remote"
 )
 
 func TestFormatLoadAverage(t *testing.T) {
@@ -51,7 +53,7 @@ func TestLoadAverage(t *testing.T) {
 		t.Skipf("%s unavailable: %v", loadAveragePath, err)
 	}
 
-	got, err := LoadAverage(context.Background())
+	got, err := (&Tools{Runner: &remote.Runner{}}).LoadAverage(context.Background(), "local")
 	if err != nil {
 		t.Fatalf("LoadAverage: %v", err)
 	}
@@ -81,7 +83,8 @@ func TestHumanBytes(t *testing.T) {
 
 func TestDiskUsage(t *testing.T) {
 	dir := t.TempDir()
-	got, err := DiskUsage(context.Background(), dir)
+	tools := &Tools{Runner: &remote.Runner{}}
+	got, err := tools.DiskUsage(context.Background(), "local", dir)
 	if err != nil {
 		t.Fatalf("DiskUsage(%q): %v", dir, err)
 	}
@@ -89,7 +92,7 @@ func TestDiskUsage(t *testing.T) {
 		t.Errorf("DiskUsage = %q, want %q prefix with usage", got, dir)
 	}
 
-	root, err := DiskUsage(context.Background(), "")
+	root, err := tools.DiskUsage(context.Background(), "local", "")
 	if err != nil {
 		t.Fatalf("DiskUsage(default): %v", err)
 	}
@@ -97,13 +100,13 @@ func TestDiskUsage(t *testing.T) {
 		t.Errorf("DiskUsage(default) = %q, want / prefix", root)
 	}
 
-	if _, err := DiskUsage(context.Background(), dir+"/missing"); err == nil {
+	if _, err := tools.DiskUsage(context.Background(), "local", dir+"/missing"); err == nil {
 		t.Error("DiskUsage(missing) = nil error, want error")
 	}
 }
 
 func TestRegistry(t *testing.T) {
-	registry := Registry()
+	registry := Registry(&remote.Runner{})
 
 	load, ok := registry["get_load_average"]
 	if !ok {
@@ -141,10 +144,10 @@ func TestRegistry(t *testing.T) {
 
 func TestSpecs(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 2 {
-		t.Fatalf("Specs() = %d, want 2", len(specs))
+	if len(specs) != 5 {
+		t.Fatalf("Specs() = %d, want 5", len(specs))
 	}
-	registry := Registry()
+	registry := Registry(&remote.Runner{})
 	for _, spec := range specs {
 		if _, ok := registry[spec.Name]; !ok {
 			t.Errorf("spec %q has no registry entry", spec.Name)

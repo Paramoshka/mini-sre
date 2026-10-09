@@ -1,0 +1,150 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"mini-sre/internal/config"
+	"mini-sre/internal/remote"
+)
+
+func fakeCommand(t *testing.T, name, stdout, stderr string, exit string) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$MINISRE_TEST_ARGS\"\nprintf '%s' \"$MINISRE_TEST_STDOUT\"\nprintf '%s' \"$MINISRE_TEST_STDERR\" >&2\nexit \"$MINISRE_TEST_EXIT\"\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("MINISRE_TEST_ARGS", argsFile)
+	t.Setenv("MINISRE_TEST_STDOUT", stdout)
+	t.Setenv("MINISRE_TEST_STDERR", stderr)
+	t.Setenv("MINISRE_TEST_EXIT", exit)
+	return argsFile
+}
+
+func TestServiceStatus(t *testing.T) {
+	tests := []struct {
+		backend, command, stdout string
+		wantErr                  bool
+	}{
+		{"systemd", "systemctl", "LoadState=loaded\nActiveState=active\nSubState=running\n", false},
+		{"systemd", "systemctl", "LoadState=loaded\nActiveState=failed\nResult=exit-code\nExecMainStatus=1\n", false},
+		{"systemd", "systemctl", "LoadState=loaded\nActiveState=inactive\nSubState=dead\n", false},
+		{"systemd", "systemctl", "LoadState=not-found\nActiveState=inactive\n", true},
+		{"docker", "docker", `{"Status":"exited","ExitCode":2}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.backend+tt.stdout, func(t *testing.T) {
+			argsFile := fakeCommand(t, tt.command, tt.stdout, "", "0")
+			out, err := (&Tools{Runner: &remote.Runner{}}).ServiceStatus(context.Background(), "local", "nginx", tt.backend)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("status=%q err=%v", out, err)
+			}
+			if !tt.wantErr && out != tt.stdout {
+				t.Fatalf("status=%q want=%q", out, tt.stdout)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.backend == "docker" {
+				if !strings.Contains(string(args), "--format={{json .State}}\n") || !strings.HasSuffix(string(args), "--\nnginx\n") {
+					t.Fatalf("unsafe or wrong Docker inspect: %s", args)
+				}
+			} else if !strings.HasSuffix(string(args), "--\nnginx.service\n") {
+				t.Fatalf("wrong systemd unit: %s", args)
+			}
+		})
+	}
+}
+
+func TestServiceLogs(t *testing.T) {
+	for _, backend := range []string{"systemd", "docker"} {
+		t.Run(backend, func(t *testing.T) {
+			program := "journalctl"
+			if backend == "docker" {
+				program = "docker"
+			}
+			argsFile := fakeCommand(t, program, "stdout log\n", "stderr log\n", "0")
+			call := Registry(&remote.Runner{})["get_service_logs"]
+			out, err := call(context.Background(), json.RawMessage(`{"service":"nginx","backend":"`+backend+`"}`))
+			if err != nil || out != "stdout log\nstderr log\n" {
+				t.Fatalf("logs: %q %v", out, err)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backend == "systemd" && (!strings.Contains(string(args), "--lines=100\n") || !strings.Contains(string(args), "--since=-60min\n")) {
+				t.Fatalf("wrong journal defaults: %s", args)
+			}
+			if backend == "docker" && (!strings.Contains(string(args), "--tail=100\n") || !strings.Contains(string(args), "--since=60m\n")) {
+				t.Fatalf("wrong Docker defaults: %s", args)
+			}
+			if strings.Contains(string(args), "--follow") {
+				t.Fatal("logs must not follow")
+			}
+		})
+	}
+}
+
+func TestLogErrorsAndValidation(t *testing.T) {
+	argsFile := fakeCommand(t, "journalctl", "", "permission denied: secret", "1")
+	r := &remote.Runner{Config: config.Config{Hosts: map[string]config.Host{"web": {Password: "secret"}}}}
+	call := Registry(r)["get_service_logs"]
+	for _, raw := range []string{
+		`{"lines":0}`, `{"lines":501}`, `{"since_minutes":-1}`, `{"backend":"docker"}`,
+		`{"backend":"openrc"}`, `{"service":"-all"}`, `{"service":"nginx*"}`, `{"service":"a; touch file"}`,
+		`{"lines":"secret"}`, `{"command":"rm"}`, `[]`, `null`, `{} {}`, `{bad`,
+	} {
+		if _, err := call(context.Background(), json.RawMessage(raw)); err == nil {
+			t.Fatalf("invalid arguments accepted: %s", raw)
+		}
+	}
+	if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+		t.Fatal("a command ran before validation")
+	}
+	_, err := call(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("permission error or redaction: %v", err)
+	}
+}
+
+func TestEmptyJournalAndDiskArguments(t *testing.T) {
+	t.Run("empty journal", func(t *testing.T) {
+		argsFile := fakeCommand(t, "journalctl", "", "", "0")
+		out, err := Registry(&remote.Runner{})["get_service_logs"](context.Background(), nil)
+		if err != nil || !strings.Contains(out, "No log entries") {
+			t.Fatalf("empty logs: %q %v", out, err)
+		}
+		args, err := os.ReadFile(argsFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(args), "--unit") {
+			t.Fatal("general journal was restricted to a service")
+		}
+	})
+	t.Run("literal path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "space ' $(touch injected)")
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		out, err := (&Tools{Runner: &remote.Runner{}}).DiskUsage(context.Background(), "local", path)
+		if err != nil || !strings.HasPrefix(out, path+": total=") {
+			t.Fatalf("disk path: %q %v", out, err)
+		}
+	})
+	t.Run("malformed disk result", func(t *testing.T) {
+		fakeCommand(t, "df", "Size Used Avail\n1024 invalid 512\n", "", "0")
+		if _, err := (&Tools{Runner: &remote.Runner{}}).DiskUsage(context.Background(), "local", "/"); err == nil {
+			t.Fatal("malformed disk result accepted")
+		}
+	})
+}

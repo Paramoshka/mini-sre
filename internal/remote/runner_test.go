@@ -67,6 +67,16 @@ func TestSSHCommands(t *testing.T) {
 					t.Fatalf("SSH literal arguments: %+v, %v", result, err)
 				}
 			}
+			for _, command := range [][]string{{"cat", "/proc/loadavg"}, {"df", "-B1", "--output=size,used,avail", "--", "/"}} {
+				local, err := r.Run(context.Background(), "local", command[0], command[1:]...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				remote, err := r.Run(context.Background(), "web", command[0], command[1:]...)
+				if err != nil || len(strings.Fields(local.Stdout)) != len(strings.Fields(remote.Stdout)) {
+					t.Fatalf("local/SSH metrics: %+v, %v", remote, err)
+				}
+			}
 			result, err := r.Run(context.Background(), "web", "sh", "-c", "printf failure >&2; exit 7")
 			if err == nil || result.Stderr != "failure" {
 				t.Fatalf("SSH exit failure: %+v, %v", result, err)

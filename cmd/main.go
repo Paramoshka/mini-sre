@@ -13,6 +13,7 @@ import (
 	"mini-sre/internal/agent"
 	"mini-sre/internal/cli"
 	"mini-sre/internal/dotenv"
+	"mini-sre/internal/remote"
 	"mini-sre/internal/tools"
 )
 
@@ -66,7 +67,7 @@ func run() error {
 		Stream:       *stream,
 		Reasoning:    *reasoning,
 		Tools:        toolSpecs(),
-		RunTool:      toolRunner(),
+		RunTool:      toolRunner(&remote.Runner{}),
 	}
 
 	if args := flag.Args(); len(args) > 0 {
@@ -88,8 +89,8 @@ func toolSpecs() []agent.Tool {
 	return out
 }
 
-func toolRunner() func(ctx context.Context, call agent.ToolCall) (string, error) {
-	registry := tools.Registry()
+func toolRunner(runner *remote.Runner) func(ctx context.Context, call agent.ToolCall) (string, error) {
+	registry := tools.Registry(runner)
 	return func(ctx context.Context, call agent.ToolCall) (string, error) {
 		run, ok := registry[call.Name]
 		if !ok {

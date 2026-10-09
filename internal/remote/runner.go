@@ -72,6 +72,10 @@ func (r *Runner) Run(ctx context.Context, hostID, program string, args ...string
 		return result, fmt.Errorf("command on %q: %w", hostID, ctx.Err())
 	}
 	if err != nil {
+		// The socket deadline may fire before the context timer is scheduled.
+		if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			return result, fmt.Errorf("command on %q: %w", hostID, context.DeadlineExceeded)
+		}
 		return result, fmt.Errorf("command %q on %q: %s", program, hostID, r.Redact(err.Error()))
 	}
 	return result, nil

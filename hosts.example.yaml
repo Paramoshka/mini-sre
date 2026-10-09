@@ -1,0 +1,17 @@
+# Paths are relative to this file. Omit known_hosts to use ~/.ssh/known_hosts.
+known_hosts: known_hosts
+
+hosts:
+  web-1:
+    address: 192.168.1.20
+    port: 22
+    user: sre
+    key_file: keys/sre_ed25519
+
+  storage-1:
+    address: 192.168.1.30
+    user: sre
+    password: "replace-me"
+
+telegram:
+  allowed_user_ids: [123456789]

@@ -92,6 +92,22 @@ func TestSSHCommands(t *testing.T) {
 			if _, err := r.Run(context.Background(), "web", "true"); err == nil || !strings.Contains(err.Error(), "host key") {
 				t.Fatalf("unknown host key: %v", err)
 			}
+			_, wrongKey, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrongSigner, err := ssh.NewSignerFromKey(wrongKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := r.Config.Hosts["web"]
+			address := net.JoinHostPort(h.Address, fmt.Sprint(h.Port))
+			if err := os.WriteFile(r.Config.KnownHosts, []byte(knownhosts.Line([]string{address}, wrongSigner.PublicKey())+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Run(context.Background(), "web", "true"); err == nil || !strings.Contains(err.Error(), "host key") {
+				t.Fatalf("changed host key accepted: %v", err)
+			}
 		})
 	}
 }
@@ -256,5 +272,32 @@ func TestSSHAuthenticationFailure(t *testing.T) {
 	}
 	if got := r.Hosts(); strings.Join(got, ",") != "local,web" {
 		t.Fatal(got)
+	}
+}
+
+func TestSSHKeyFailuresDoNotExposeKeyData(t *testing.T) {
+	r := testSSH(t, true)
+	h := r.Config.Hosts["web"]
+	if err := os.WriteFile(h.KeyFile, []byte("invalid-private-key-data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.Run(context.Background(), "web", "true")
+	if err == nil || strings.Contains(err.Error(), "invalid-private-key-data") || strings.Contains(err.Error(), h.KeyFile) {
+		t.Fatalf("key read/parse error: %v", err)
+	}
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(private, "test", []byte("test-passphrase"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.KeyFile, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.Run(context.Background(), "web", "true")
+	if err == nil || !strings.Contains(err.Error(), "unencrypted") || strings.Contains(err.Error(), "test-passphrase") {
+		t.Fatalf("encrypted key error: %v", err)
 	}
 }

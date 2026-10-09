@@ -117,6 +117,13 @@ func TestLogErrorsAndValidation(t *testing.T) {
 }
 
 func TestEmptyJournalAndDiskArguments(t *testing.T) {
+	t.Run("truncated logs", func(t *testing.T) {
+		fakeCommand(t, "journalctl", strings.Repeat("x", 70000), "", "0")
+		out, err := Registry(&remote.Runner{})["get_service_logs"](context.Background(), nil)
+		if err != nil || !strings.Contains(out, "[output truncated at 64 KiB]") {
+			t.Fatalf("truncation marker missing: len=%d err=%v", len(out), err)
+		}
+	})
 	t.Run("empty journal", func(t *testing.T) {
 		argsFile := fakeCommand(t, "journalctl", "", "", "0")
 		out, err := Registry(&remote.Runner{})["get_service_logs"](context.Background(), nil)

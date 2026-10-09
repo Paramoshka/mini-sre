@@ -1,0 +1,13 @@
+[Unit]
+Description=mini-sre Telegram diagnostics bot
+
+[Service]
+Type=simple
+WorkingDirectory=%h/mini-sre
+ExecStart=%h/mini-sre/mini-sre -config %h/mini-sre/hosts.yaml -telegram
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

@@ -66,3 +66,43 @@ func TestSessionRollbackAndToolErrors(t *testing.T) {
 		t.Fatal("cancelled request was not rolled back")
 	}
 }
+
+func TestSessionFinalAnswerAfterFiveToolRounds(t *testing.T) {
+	for _, finalCallsTool := range []bool{false, true} {
+		t.Run(fmt.Sprint(finalCallsTool), func(t *testing.T) {
+			turns, executions := 0, 0
+			s := &Session{Tools: []agent.Tool{{Name: "probe"}}}
+			s.Turn = func(_ context.Context, req agent.Request) (*agent.Response, error) {
+				turns++
+				if turns <= 5 {
+					if len(req.Tools) != 1 {
+						t.Fatal("tools disabled before the round limit")
+					}
+					return &agent.Response{ToolCalls: []agent.ToolCall{{ID: fmt.Sprint(turns), Name: "probe"}}}, nil
+				}
+				if len(req.Tools) != 0 || req.Messages[len(req.Messages)-1].Content != "result 5" {
+					t.Fatal("final turn must receive the fifth result without offering tools")
+				}
+				if finalCallsTool {
+					return &agent.Response{ToolCalls: []agent.ToolCall{{ID: "extra", Name: "probe"}}}, nil
+				}
+				return &agent.Response{Content: "done"}, nil
+			}
+			s.RunTool = func(context.Context, agent.ToolCall) (string, error) {
+				executions++
+				return fmt.Sprintf("result %d", executions), nil
+			}
+			resp, err := s.Ask(context.Background(), "diagnose")
+			if turns != 6 || executions != 5 {
+				t.Fatalf("turns=%d executions=%d, want 6 and 5", turns, executions)
+			}
+			if finalCallsTool {
+				if err == nil || !strings.Contains(err.Error(), "tool rounds exceeded") || len(s.History) != 1 {
+					t.Fatalf("extra tool round was not rejected and rolled back: %v", err)
+				}
+			} else if err != nil || resp.Content != "done" || len(s.History) != 13 {
+				t.Fatalf("final answer failed: response=%+v err=%v history=%d", resp, err, len(s.History))
+			}
+		})
+	}
+}

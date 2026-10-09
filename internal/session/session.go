@@ -48,11 +48,15 @@ func (s *Session) Ask(ctx context.Context, input string) (response *agent.Respon
 		}
 	}()
 	s.History = append(s.History, agent.Message{Role: agent.RoleUser, Content: input})
-	for range maxToolRounds {
+	for round := 0; round <= maxToolRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		resp, err := s.Turn(ctx, agent.Request{Messages: s.History, Tools: s.Tools})
+		tools := s.Tools
+		if round == maxToolRounds {
+			tools = nil
+		}
+		resp, err := s.Turn(ctx, agent.Request{Messages: s.History, Tools: tools})
 		if err != nil {
 			return nil, err
 		}
@@ -63,6 +67,9 @@ func (s *Session) Ask(ctx context.Context, input string) (response *agent.Respon
 		if len(resp.ToolCalls) == 0 {
 			s.trimHistory()
 			return resp, nil
+		}
+		if round == maxToolRounds {
+			break
 		}
 		for _, call := range resp.ToolCalls {
 			if err := ctx.Err(); err != nil {

@@ -192,7 +192,7 @@ Layout:
 - `internal/agent` - DeepSeek client: Chat, ChatStream (iterator), tool calls, its own
   types, the SDK does not leak outside;
 - `internal/cli` - REPL, one-shot, streaming console output;
-- `internal/session` - shared history and agent loop (up to 5 tool call rounds);
+- `internal/session` - shared history and agent loop (up to 5 tool call rounds, then a final answer without tools);
 - `internal/tools` - probes and their JSON schemas for the model;
 - `internal/config`, `internal/remote` - YAML hosts and local/SSH command execution;
 - `internal/telegram` - Bot API polling, authorization and chat sessions;

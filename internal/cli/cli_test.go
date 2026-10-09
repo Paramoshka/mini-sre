@@ -115,17 +115,17 @@ func TestAskStreamsAnswer(t *testing.T) {
 		t.Errorf("stderr = %q, want cache stats", errOut.String())
 	}
 
-	if len(app.history) != 3 {
-		t.Fatalf("history = %d messages, want 3", len(app.history))
+	if len(app.session.History) != 3 {
+		t.Fatalf("history = %d messages, want 3", len(app.session.History))
 	}
-	if app.history[0].Role != agent.RoleSystem || app.history[0].Content != DefaultSystemPrompt {
-		t.Errorf("history[0] = %+v, want system %q", app.history[0], DefaultSystemPrompt)
+	if app.session.History[0].Role != agent.RoleSystem || app.session.History[0].Content != DefaultSystemPrompt {
+		t.Errorf("history[0] = %+v, want system %q", app.session.History[0], DefaultSystemPrompt)
 	}
-	if app.history[1].Role != agent.RoleUser || app.history[1].Content != "hi" {
-		t.Errorf("history[1] = %+v, want user/hi", app.history[1])
+	if app.session.History[1].Role != agent.RoleUser || app.session.History[1].Content != "hi" {
+		t.Errorf("history[1] = %+v, want user/hi", app.session.History[1])
 	}
-	if app.history[2].Role != agent.RoleAssistant || app.history[2].Content != "hello world" {
-		t.Errorf("history[2] = %+v, want assistant/hello world", app.history[2])
+	if app.session.History[2].Role != agent.RoleAssistant || app.session.History[2].Content != "hello world" {
+		t.Errorf("history[2] = %+v, want assistant/hello world", app.session.History[2])
 	}
 
 	reqs := rec.snapshot()
@@ -168,8 +168,8 @@ func TestAskRollsBackHistoryOnError(t *testing.T) {
 	if err := app.Ask(context.Background(), "hi"); err == nil {
 		t.Fatal("Ask() = nil error, want error")
 	}
-	if len(app.history) != 1 || app.history[0].Role != agent.RoleSystem {
-		t.Errorf("history = %+v, want only system message", app.history)
+	if len(app.session.History) != 1 || app.session.History[0].Role != agent.RoleSystem {
+		t.Errorf("history = %+v, want only system message", app.session.History)
 	}
 }
 
@@ -233,17 +233,17 @@ func TestAskRunsTools(t *testing.T) {
 		t.Errorf("stdout = %q, want final answer", out.String())
 	}
 
-	if len(app.history) != 5 {
-		t.Fatalf("history = %d messages, want 5", len(app.history))
+	if len(app.session.History) != 5 {
+		t.Fatalf("history = %d messages, want 5", len(app.session.History))
 	}
-	if app.history[2].Role != agent.RoleAssistant || len(app.history[2].ToolCalls) != 1 {
-		t.Errorf("history[2] = %+v, want assistant with tool call", app.history[2])
+	if app.session.History[2].Role != agent.RoleAssistant || len(app.session.History[2].ToolCalls) != 1 {
+		t.Errorf("history[2] = %+v, want assistant with tool call", app.session.History[2])
 	}
-	if app.history[3].Role != agent.RoleTool || app.history[3].ToolCallID != "call_1" {
-		t.Errorf("history[3] = %+v, want tool result for call_1", app.history[3])
+	if app.session.History[3].Role != agent.RoleTool || app.session.History[3].ToolCallID != "call_1" {
+		t.Errorf("history[3] = %+v, want tool result for call_1", app.session.History[3])
 	}
-	if app.history[4].Role != agent.RoleAssistant || app.history[4].Content != "hello world" {
-		t.Errorf("history[4] = %+v, want final assistant answer", app.history[4])
+	if app.session.History[4].Role != agent.RoleAssistant || app.session.History[4].Content != "hello world" {
+		t.Errorf("history[4] = %+v, want final assistant answer", app.session.History[4])
 	}
 
 	mu.Lock()
@@ -290,8 +290,8 @@ func TestAskToolRoundsExceeded(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "tool rounds exceeded") {
 		t.Fatalf("Ask error = %v, want tool rounds exceeded", err)
 	}
-	if len(app.history) != 1 || app.history[0].Role != agent.RoleSystem {
-		t.Errorf("history = %+v, want rolled back to system message", app.history)
+	if len(app.session.History) != 1 || app.session.History[0].Role != agent.RoleSystem {
+		t.Errorf("history = %+v, want rolled back to system message", app.session.History)
 	}
 }
 
@@ -341,8 +341,8 @@ func TestRunClear(t *testing.T) {
 	if err := app.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(app.history) != 1 || app.history[0].Role != agent.RoleSystem {
-		t.Errorf("history = %+v, want only system message after /clear", app.history)
+	if len(app.session.History) != 1 || app.session.History[0].Role != agent.RoleSystem {
+		t.Errorf("history = %+v, want only system message after /clear", app.session.History)
 	}
 }
 

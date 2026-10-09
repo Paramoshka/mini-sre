@@ -1,0 +1,210 @@
+package telegram
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+	"unicode/utf16"
+	"unicode/utf8"
+
+	"mini-sre/internal/agent"
+	"mini-sre/internal/session"
+)
+
+type sentMessage struct {
+	ChatID int64  `json:"chat_id"`
+	Text   string `json:"text"`
+}
+
+func privateMessage(t *testing.T, user int64, text string) *message {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"text": text, "from": map[string]any{"id": user}, "chat": map[string]any{"id": user, "type": "private"},
+		"forward_origin": map[string]any{"type": "user", "sender_user": map[string]any{"id": 999}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m message
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	return &m
+}
+
+func TestAccessAndChatHistory(t *testing.T) {
+	var mu sync.Mutex
+	var sent []sentMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg sentMessage
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			t.Error(err)
+		}
+		mu.Lock()
+		sent = append(sent, msg)
+		mu.Unlock()
+		io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	var histories [][]agent.Message
+	factory := func() *session.Session {
+		return &session.Session{Turn: func(_ context.Context, req agent.Request) (*agent.Response, error) {
+			histories = append(histories, append([]agent.Message(nil), req.Messages...))
+			return &agent.Response{Content: "answer"}, nil
+		}}
+	}
+	bot, err := New("secret-token", []int64{1, 2}, factory, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.baseURL = server.URL
+	group := privateMessage(t, 1, "group request")
+	group.Chat.Type = "group"
+	for _, m := range []*message{nil, privateMessage(t, 999, "unauthorized"), group, privateMessage(t, 1, " ")} {
+		if err := bot.handle(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(histories) != 0 || len(bot.sessions) != 0 {
+		t.Fatal("unauthorized request reached the model")
+	}
+	for _, m := range []*message{
+		privateMessage(t, 1, "/start"), privateMessage(t, 1, "forwarded problem"),
+		privateMessage(t, 1, "second question"), privateMessage(t, 2, "other chat"),
+		privateMessage(t, 1, "/clear"), privateMessage(t, 1, "fresh question"),
+	} {
+		if err := bot.handle(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(histories) != 4 || len(histories[0]) != 2 || len(histories[1]) != 4 || len(histories[2]) != 2 || len(histories[3]) != 2 {
+		t.Fatalf("history crossed chats or reset failed: %+v", histories)
+	}
+	if histories[0][1].Content != "forwarded problem" || bot.sessions[1].MaxHistoryTurns != 20 {
+		t.Fatal("forwarded text or history limit incorrect")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 6 || sent[3].ChatID != 2 {
+		t.Fatalf("wrong replies: %+v", sent)
+	}
+}
+
+func TestPollingOffsetRetriesAndDuplicates(t *testing.T) {
+	var mu sync.Mutex
+	var offsets []int64
+	polls, sent, modelCalls := 0, 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getWebhookInfo"):
+			io.WriteString(w, `{"ok":true,"result":{"url":""}}`)
+		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+			var params struct {
+				Offset int64 `json:"offset"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+				t.Error(err)
+			}
+			offsets = append(offsets, params.Offset)
+			polls++
+			switch polls {
+			case 1:
+				w.WriteHeader(503)
+				io.WriteString(w, `{"ok":false,"error_code":503,"description":"temporary"}`)
+			case 2:
+				io.WriteString(w, `{"ok":true,"result":[{"update_id":3,"message":{"text":"unauthorized","from":{"id":999},"chat":{"id":999,"type":"private"}}},{"update_id":2,"message":{"text":"check","from":{"id":1},"chat":{"id":1,"type":"private"}}},{"update_id":2,"message":{"text":"duplicate","from":{"id":1},"chat":{"id":1,"type":"private"}}}]}`)
+			case 3:
+				io.WriteString(w, `{"ok":true,"result":[{"update_id":2,"message":{"text":"old","from":{"id":1},"chat":{"id":1,"type":"private"}}},{"update_id":4,"message":{"text":"next","from":{"id":1},"chat":{"id":1,"type":"private"}}}]}`)
+			default:
+				w.WriteHeader(409)
+				io.WriteString(w, `{"ok":false,"error_code":409,"description":"other poller"}`)
+			}
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			sent++
+			io.WriteString(w, `{"ok":true,"result":{}}`)
+		default:
+			t.Errorf("unexpected API method: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	bot, err := New("secret-token", []int64{1}, func() *session.Session {
+		return &session.Session{Turn: func(context.Context, agent.Request) (*agent.Response, error) {
+			modelCalls++
+			return &agent.Response{Content: "done"}, nil
+		}}
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.baseURL = server.URL
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = bot.Run(ctx)
+	if err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("polling conflict was not fatal: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(offsets) != "[0 0 4 5]" || sent != 2 || modelCalls != 2 || bot.offset != 5 {
+		t.Fatalf("offsets=%v sent=%d modelCalls=%d final=%d", offsets, sent, modelCalls, bot.offset)
+	}
+}
+
+func TestWebhookAndShutdown(t *testing.T) {
+	for _, webhook := range []bool{true, false} {
+		t.Run(fmt.Sprintf("webhook=%v", webhook), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/getWebhookInfo") {
+					url := ""
+					if webhook {
+						url = "https://example.test/hook"
+					}
+					fmt.Fprintf(w, `{"ok":true,"result":{"url":%q}}`, url)
+					return
+				}
+				if webhook {
+					t.Error("bot changed or polled a configured webhook")
+				}
+				io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			bot, err := New("secret-token", []int64{1}, nil, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bot.baseURL = server.URL
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			err = bot.Run(ctx)
+			if webhook && (err == nil || !strings.Contains(err.Error(), "webhook")) {
+				t.Fatalf("webhook not rejected: %v", err)
+			}
+			if !webhook && err != nil {
+				t.Fatalf("shutdown failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestReplySplitting(t *testing.T) {
+	text := strings.Repeat("Привет🙂", 1800)
+	parts := splitText(text)
+	if len(parts) < 2 || strings.Join(parts, "") != text {
+		t.Fatal("split lost text")
+	}
+	for _, part := range parts {
+		if !utf8.ValidString(part) || len(utf16.Encode([]rune(part))) > 4000 || part == "" {
+			t.Fatal("split broke Unicode or size limit")
+		}
+	}
+}

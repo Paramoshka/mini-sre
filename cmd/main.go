@@ -12,8 +12,11 @@ import (
 
 	"mini-sre/internal/agent"
 	"mini-sre/internal/cli"
+	"mini-sre/internal/config"
 	"mini-sre/internal/dotenv"
 	"mini-sre/internal/remote"
+	"mini-sre/internal/session"
+	"mini-sre/internal/telegram"
 	"mini-sre/internal/tools"
 )
 
@@ -26,12 +29,14 @@ func main() {
 
 func run() error {
 	var (
-		model       = flag.String("model", "", "model ID (default deepseek-flash)")
-		baseURL     = flag.String("base-url", "", "API base URL (default https://api.deepseek.com)")
-		temperature = flag.Float64("temperature", -1, "sampling temperature 0..2 (-1 = server default)")
-		thinking    = flag.Bool("thinking", false, "enable thinking mode")
-		reasoning   = flag.Bool("reasoning", false, "print reasoning content to stderr")
-		stream      = flag.Bool("stream", true, "stream tokens as they arrive")
+		model        = flag.String("model", "", "model ID (default deepseek-flash)")
+		baseURL      = flag.String("base-url", "", "API base URL (default https://api.deepseek.com)")
+		temperature  = flag.Float64("temperature", -1, "sampling temperature 0..2 (-1 = server default)")
+		thinking     = flag.Bool("thinking", false, "enable thinking mode")
+		reasoning    = flag.Bool("reasoning", false, "print reasoning content to stderr")
+		stream       = flag.Bool("stream", true, "stream tokens as they arrive")
+		configPath   = flag.String("config", "", "host and Telegram configuration YAML (default local only)")
+		telegramMode = flag.Bool("telegram", false, "run the Telegram bot instead of the console")
 	)
 	flag.Parse()
 
@@ -49,6 +54,14 @@ func run() error {
 	if err := dotenv.Load(".env"); err != nil {
 		return err
 	}
+	hostConfig, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if *telegramMode && (*configPath == "" || len(flag.Args()) != 0) {
+		return fmt.Errorf("telegram mode requires -config and does not accept a positional prompt")
+	}
+	runner := &remote.Runner{Config: hostConfig}
 
 	client, err := agent.New(cfg)
 	if err != nil {
@@ -57,6 +70,16 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *telegramMode {
+		bot, err := telegram.New(os.Getenv("TELEGRAM_BOT_TOKEN"), hostConfig.Telegram.AllowedUserIDs,
+			func() *session.Session {
+				return &session.Session{Turn: client.Chat, Tools: toolSpecs(), RunTool: toolRunner(runner)}
+			}, os.Stderr)
+		if err != nil {
+			return err
+		}
+		return bot.Run(ctx)
+	}
 
 	app := &cli.App{
 		Client:       client,
@@ -67,7 +90,7 @@ func run() error {
 		Stream:       *stream,
 		Reasoning:    *reasoning,
 		Tools:        toolSpecs(),
-		RunTool:      toolRunner(&remote.Runner{}),
+		RunTool:      toolRunner(runner),
 	}
 
 	if args := flag.Args(); len(args) > 0 {

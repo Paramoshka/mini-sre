@@ -8,12 +8,12 @@ import (
 	"strings"
 
 	"mini-sre/internal/agent"
+	"mini-sre/internal/session"
 )
 
 const (
-	DefaultSystemPrompt = "You are mini-sre, a concise SRE assistant running on a Linux host."
+	DefaultSystemPrompt = session.DefaultSystemPrompt
 	prompt              = "mini-sre> "
-	maxToolRounds       = 5
 )
 
 type Chatter interface {
@@ -32,12 +32,12 @@ type App struct {
 	Tools        []agent.Tool
 	RunTool      func(ctx context.Context, call agent.ToolCall) (string, error)
 
-	history []agent.Message
+	session *session.Session
 	usage   agent.Usage
 }
 
 func (a *App) Run(ctx context.Context) error {
-	a.ensureHistory()
+	a.ensureSession()
 
 	scanner := bufio.NewScanner(a.In)
 	for {
@@ -64,58 +64,12 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) Ask(ctx context.Context, input string) error {
-	a.ensureHistory()
-
-	base := len(a.history)
-	a.history = append(a.history, agent.Message{Role: agent.RoleUser, Content: input})
-
-	for range maxToolRounds {
-		resp, err := a.turn(ctx)
-		if err != nil {
-			a.history = a.history[:base]
-			return err
-		}
-
-		assistant := agent.Message{
-			Role:             agent.RoleAssistant,
-			Content:          resp.Content,
-			ReasoningContent: resp.ReasoningContent,
-			ToolCalls:        resp.ToolCalls,
-		}
-		a.history = append(a.history, assistant)
-
-		if len(resp.ToolCalls) == 0 {
-			return nil
-		}
-
-		for _, call := range resp.ToolCalls {
-			fmt.Fprintf(a.Err, "→ %s(%s)\n", call.Name, call.Arguments)
-			result, err := a.runTool(ctx, call)
-			if err != nil {
-				result = "error: " + err.Error()
-			}
-			a.history = append(a.history, agent.Message{
-				Role:       agent.RoleTool,
-				Content:    result,
-				ToolCallID: call.ID,
-			})
-		}
-	}
-
-	a.history = a.history[:base]
-	return fmt.Errorf("agent: tool rounds exceeded %d", maxToolRounds)
+	a.ensureSession()
+	_, err := a.session.Ask(ctx, input)
+	return err
 }
 
-func (a *App) runTool(ctx context.Context, call agent.ToolCall) (string, error) {
-	if a.RunTool == nil {
-		return "", fmt.Errorf("no tool executor configured")
-	}
-	return a.RunTool(ctx, call)
-}
-
-func (a *App) turn(ctx context.Context) (*agent.Response, error) {
-	req := agent.Request{Messages: a.history, Tools: a.Tools}
-
+func (a *App) turn(ctx context.Context, req agent.Request) (*agent.Response, error) {
 	if !a.Stream {
 		resp, err := a.Client.Chat(ctx, req)
 		if err != nil {
@@ -171,7 +125,7 @@ func (a *App) handleCommand(line string) (quit bool) {
 	case "/exit", "/quit":
 		return true
 	case "/clear":
-		a.history = a.history[:1]
+		a.session.Reset()
 	case "/usage":
 		fmt.Fprintf(a.Out, "tokens: prompt=%d completion=%d total=%d, cache: hit=%d miss=%d\n",
 			a.usage.PromptTokens, a.usage.CompletionTokens, a.usage.TotalTokens,
@@ -191,13 +145,15 @@ func (a *App) printUsage() {
 		a.usage.CacheHitTokens, a.usage.CacheMissTokens)
 }
 
-func (a *App) ensureHistory() {
-	if a.history != nil {
+func (a *App) ensureSession() {
+	if a.session != nil {
 		return
 	}
-	promptText := a.SystemPrompt
-	if promptText == "" {
-		promptText = DefaultSystemPrompt
+	a.session = &session.Session{
+		Turn: a.turn, Tools: a.Tools, RunTool: a.RunTool, SystemPrompt: a.SystemPrompt,
+		OnToolCall: func(call agent.ToolCall) {
+			fmt.Fprintf(a.Err, "→ %s(%s)\n", call.Name, call.Arguments)
+		},
 	}
-	a.history = []agent.Message{{Role: agent.RoleSystem, Content: promptText}}
+	a.session.Reset()
 }

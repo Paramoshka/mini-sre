@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const maxScheduledTasks = 5
+
 type scheduledTask struct {
 	ID          string    `json:"id"`
 	OwnerID     int64     `json:"owner_id"`
@@ -131,6 +133,9 @@ func decodeTaskFile(data []byte) (taskFile, error) {
 	var extra any
 	if dec.Decode(&extra) != io.EOF || file.Version != 1 || file.Tasks == nil {
 		return file, errors.New("tasks: invalid or unsupported file format")
+	}
+	if len(file.Tasks) > maxScheduledTasks {
+		return file, fmt.Errorf("tasks: MVP supports at most %d tasks, including paused tasks", maxScheduledTasks)
 	}
 	ids := make(map[string]bool)
 	for _, task := range file.Tasks {

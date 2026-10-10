@@ -386,3 +386,91 @@ func TestTaskModelDeadlineIsUnknown(t *testing.T) {
 		t.Fatalf("timeout was classified as an observed incident: %+v", result)
 	}
 }
+
+func TestTaskLimitIncludesPausedTasksAndAllOwners(t *testing.T) {
+	_, s := testTasks(t)
+	for i := range maxScheduledTasks {
+		reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, updateID: int64(i + 1), input: "/task add 1m 1h Проверяй nginx"})
+		if reply.err != nil || !strings.Contains(reply.text, "создана") {
+			t.Fatalf("task below limit rejected: %+v", reply)
+		}
+	}
+	checkpoint := s.file.LastCommand
+	duplicate := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, updateID: checkpoint.UpdateID, input: checkpoint.Input})
+	if duplicate.err != nil || duplicate.text != checkpoint.Reply || len(s.file.Tasks) != maxScheduledTasks {
+		t.Fatalf("duplicate command was rejected at capacity: %+v", duplicate)
+	}
+	id := s.file.Tasks[0].ID
+	reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task pause " + id})
+	if reply.err != nil || s.file.Tasks[0].Enabled {
+		t.Fatalf("pause failed: %+v", reply)
+	}
+	before, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeTaskFile(before); err != nil {
+		t.Fatalf("file at the limit was rejected: %v", err)
+	}
+	for _, owner := range []int64{1, 2} {
+		reply := s.handleCommand(taskCommand{ownerID: owner, chatID: owner, input: "/task add 1m 1h Ещё одна задача"})
+		if reply.err != nil || !strings.Contains(reply.text, "лимит MVP: 5") ||
+			!strings.Contains(reply.text, "/task delete <id>") || len(s.file.Tasks) != maxScheduledTasks {
+			t.Fatalf("owner %d bypassed limit: %+v", owner, reply)
+		}
+	}
+	after, err := os.ReadFile(s.path)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("rejected additions changed persisted tasks")
+	}
+	reply = s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task list"})
+	if reply.err != nil || !strings.Contains(reply.text, id+" · пауза") {
+		t.Fatalf("list omitted the task ID or paused state: %+v", reply)
+	}
+	reply = s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task delete " + id})
+	if reply.err != nil || s.find(id) != nil {
+		t.Fatalf("delete did not free a slot: %+v", reply)
+	}
+	reply = s.handleCommand(taskCommand{ownerID: 2, chatID: 2, input: "/task add 1m 1h Новая задача"})
+	if reply.err != nil || !strings.Contains(reply.text, "создана") || len(s.file.Tasks) != maxScheduledTasks {
+		t.Fatalf("freed slot was unavailable: %+v", reply)
+	}
+}
+
+func TestTaskLimitRejectsOversizedFilesWithoutOverwriting(t *testing.T) {
+	b, s := testTasks(t)
+	task := addTestTask(t, s, "1m", "1h")
+	editTaskFile(t, s, func(file *taskFile) {
+		for range maxScheduledTasks {
+			copy := *task
+			copy.ID = newTaskID()
+			file.Tasks = append(file.Tasks, &copy)
+		}
+	})
+	before, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reload(); err == nil || !strings.Contains(err.Error(), "at most 5 tasks") ||
+		!s.blocked || len(s.file.Tasks) != 1 {
+		t.Fatalf("oversized reload replaced valid tasks: %v", err)
+	}
+	if err := b.UseTasks(s.path); err == nil || !strings.Contains(err.Error(), "at most 5 tasks") {
+		t.Fatalf("oversized startup accepted: %v", err)
+	}
+	after, err := os.ReadFile(s.path)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("oversized file was overwritten")
+	}
+	repaired := taskFile{Version: 1, Tasks: []*scheduledTask{task}}
+	data, err := json.Marshal(repaired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeState(s.path, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reload(); err != nil || s.blocked {
+		t.Fatalf("repaired task file stayed blocked: %v", err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 const taskHelp = "/task add <проверка> <отчёт> <текст> — создать задачу, например:\n" +
 	"/task add 5m 1h Проверяй nginx на web-1; проблема, если сервис не active.\n" +
 	"/task list, /task show <id>, /task pause <id>, /task resume <id>, /task delete <id>.\n" +
+	"Лимит MVP: 5 задач на весь бот, включая задачи на паузе.\n" +
 	"Без явного критерия оценка проблемы остаётся на усмотрение модели."
 
 type taskCommand struct {
@@ -76,6 +77,9 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 		check, report, err := taskIntervals(parts[2], parts[3])
 		if err != nil {
 			return err.Error(), false
+		}
+		if len(s.file.Tasks) >= maxScheduledTasks {
+			return fmt.Sprintf("Достигнут лимит MVP: %d задач на весь бот, включая задачи на паузе. /task list — посмотреть свои задачи, /task delete <id> — удалить задачу и освободить место.", maxScheduledTasks), false
 		}
 		// Cut the four command words without changing whitespace inside the prompt.
 		prompt := cmd.input

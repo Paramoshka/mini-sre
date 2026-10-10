@@ -236,6 +236,14 @@ Go duration syntax (`5m`, `1h`, `24h`), must be at least one minute, and the rep
 interval must be at least the check interval. New and resumed tasks first run
 after one check interval. This is an interval scheduler, not calendar cron.
 
+The MVP allows **at most five tasks per bot**, shared across all allowed users,
+including paused tasks. `/task list` shows your task IDs; `/task delete ID`
+deletes a task and frees a slot. Pausing a task does not free a slot. The limit
+is also checked when loading or reloading JSON, so manual edits cannot bypass
+it. If an existing file contains more than five tasks, remove excess entries
+manually before starting the bot. Checks still run sequentially; five slow
+checks can exceed a one-minute interval.
+
 Use `/task list`, `/task show ID`, `/task pause ID`, `/task resume ID` and
 `/task delete ID`. Users can only manage their own tasks; `/clear` only clears
 chat history. Repeated delivery of the same mutating Telegram update does not

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"mini-sre/internal/session"
@@ -27,6 +28,8 @@ type Bot struct {
 	offset        int64
 	statePath     string
 	offsetSavedAt time.Time
+	tasks         *taskScheduler
+	logMu         sync.Mutex
 }
 
 type update struct {
@@ -68,7 +71,7 @@ func New(token string, users func() []int64, newSession func() *session.Session,
 	}, nil
 }
 
-func (b *Bot) Run(ctx context.Context) error {
+func (b *Bot) Run(ctx context.Context) (runErr error) {
 	var webhook struct {
 		URL string `json:"url"`
 	}
@@ -80,6 +83,21 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	if webhook.URL != "" {
 		return errors.New("telegram: webhook is configured; remove it manually before using polling")
+	}
+	if b.tasks != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			done <- b.tasks.run(ctx)
+			cancel()
+		}()
+		defer func() {
+			cancel()
+			if err := <-done; err != nil {
+				runErr = err
+			}
+		}()
 	}
 	delay := time.Second
 	for ctx.Err() == nil {
@@ -134,7 +152,7 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) process(ctx context.Context, u update) error {
-	text, err := b.handle(ctx, u.Message)
+	text, err := b.handle(ctx, u.Message, u.ID)
 	if err != nil {
 		return err
 	}
@@ -152,14 +170,20 @@ func (b *Bot) process(ctx context.Context, u update) error {
 	return b.send(ctx, u.Message.Chat.ID, text)
 }
 
-func (b *Bot) handle(ctx context.Context, m *message) (string, error) {
+func (b *Bot) handle(ctx context.Context, m *message, updateID int64) (string, error) {
 	if m == nil || m.From == nil || m.Chat.Type != "private" || !slices.Contains(b.users(), m.From.ID) || strings.TrimSpace(m.Text) == "" {
 		return "", nil
 	}
 	input := strings.TrimSpace(m.Text)
+	if input == "/task" || strings.HasPrefix(input, "/task ") || strings.HasPrefix(input, "/task\n") || strings.HasPrefix(input, "/task\t") {
+		if b.tasks == nil {
+			return "Задачи не включены для этого процесса.", nil
+		}
+		return b.tasks.command(ctx, m, updateID, input)
+	}
 	switch input {
 	case "/start":
-		return "Пришли запрос или перешли сообщение о проблеме. Укажи сервер и сервис; local — машина агента. /clear очищает историю.", nil
+		return "Пришли запрос или перешли сообщение о проблеме. Укажи сервер и сервис; local — машина агента. /clear очищает историю. /task — регулярные задачи.", nil
 	case "/clear":
 		if s := b.sessions[m.Chat.ID]; s != nil {
 			s.Reset()
@@ -204,6 +228,8 @@ func (b *Bot) send(ctx context.Context, chatID int64, text string) error {
 }
 
 func (b *Bot) log(err error) {
+	b.logMu.Lock()
+	defer b.logMu.Unlock()
 	if b.errOut != nil {
 		fmt.Fprintln(b.errOut, strings.ReplaceAll(err.Error(), b.token, "[redacted]"))
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -39,6 +40,7 @@ func run() (err error) {
 		configPath    = flag.String("config", "", "host and Telegram configuration YAML (default local only)")
 		telegramMode  = flag.Bool("telegram", false, "run the Telegram bot instead of the console")
 		telegramState = flag.String("telegram-state", "", "Telegram state file (default $XDG_STATE_HOME/mini-sre/telegram.json or ~/.local/state/mini-sre/telegram.json)")
+		telegramTasks = flag.String("telegram-tasks", "", "Scheduled tasks JSON file (default tasks.json beside Telegram state)")
 	)
 	flag.Parse()
 
@@ -96,6 +98,13 @@ func run() (err error) {
 			}
 		}
 		if err := bot.UseState(statePath); err != nil {
+			return err
+		}
+		tasksPath := *telegramTasks
+		if tasksPath == "" {
+			tasksPath = filepath.Join(filepath.Dir(statePath), "tasks.json")
+		}
+		if err := bot.UseTasks(tasksPath); err != nil {
 			return err
 		}
 		return bot.Run(ctx)

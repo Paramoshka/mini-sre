@@ -24,6 +24,9 @@ func TestCLIWatcherProcess(t *testing.T) {
 	if statePath := os.Getenv("MINI_SRE_TEST_STATE"); statePath != "" {
 		os.Args = append(os.Args, "-telegram", "-telegram-state", statePath)
 	}
+	if tasksPath := os.Getenv("MINI_SRE_TEST_TASKS"); tasksPath != "" {
+		os.Args = append(os.Args, "-telegram-tasks", tasksPath)
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -109,5 +112,48 @@ func TestTelegramProcessRejectsCorruptStateBeforePolling(t *testing.T) {
 	after, err := os.ReadFile(statePath)
 	if err != nil || string(after) != badState {
 		t.Fatal("startup overwrote corrupt state")
+	}
+}
+
+func TestTelegramProcessRejectsCorruptTasksBeforePolling(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		t.Run(fmt.Sprintf("custom_path=%t", custom), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "hosts.yaml")
+			statePath := filepath.Join(dir, "telegram.json")
+			tasksPath := filepath.Join(dir, "tasks.json")
+			if custom {
+				tasksPath = filepath.Join(dir, "custom-tasks.json")
+			}
+			if err := os.WriteFile(path, []byte("telegram:\n  allowed_user_ids: [1]\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			badTasks := `{"private-task-content":`
+			if err := os.WriteFile(tasksPath, []byte(badTasks), 0600); err != nil {
+				t.Fatal(err)
+			}
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, binary, "-test.run=^TestCLIWatcherProcess$")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "MINI_SRE_TEST_CONFIG="+path, "MINI_SRE_TEST_STATE="+statePath,
+				"DEEPSEEK_API_KEY=test-key", "TELEGRAM_BOT_TOKEN=test-token")
+			if custom {
+				cmd.Env = append(cmd.Env, "MINI_SRE_TEST_TASKS="+tasksPath)
+			}
+			output, err := cmd.CombinedOutput()
+			if err == nil || ctx.Err() != nil || !strings.Contains(string(output), "tasks: invalid JSON") ||
+				strings.Contains(string(output), "private-task-content") {
+				t.Fatalf("Telegram did not reject tasks before polling: %v, %s", err, output)
+			}
+			after, err := os.ReadFile(tasksPath)
+			if err != nil || string(after) != badTasks {
+				t.Fatal("startup overwrote corrupt tasks")
+			}
+		})
 	}
 }

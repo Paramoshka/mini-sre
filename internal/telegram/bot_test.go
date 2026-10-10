@@ -70,7 +70,7 @@ func TestAccessAndChatHistory(t *testing.T) {
 	group := privateMessage(t, 1, "group request")
 	group.Chat.Type = "group"
 	for _, m := range []*message{nil, privateMessage(t, 999, "unauthorized"), group, privateMessage(t, 1, " ")} {
-		if err := bot.handle(context.Background(), m); err != nil {
+		if err := bot.process(context.Background(), update{ID: bot.offset, Message: m}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestAccessAndChatHistory(t *testing.T) {
 		privateMessage(t, 1, "second question"), privateMessage(t, 2, "other chat"),
 		privateMessage(t, 1, "/clear"), privateMessage(t, 1, "fresh question"),
 	} {
-		if err := bot.handle(context.Background(), m); err != nil {
+		if err := bot.process(context.Background(), update{ID: bot.offset, Message: m}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -183,7 +183,7 @@ func TestAccessReloadPreservesHistory(t *testing.T) {
 		user  int64
 	}{{[]int64{1}, 1}, {[]int64{2}, 1}, {[]int64{2}, 2}, {[]int64{1, 2}, 1}} {
 		users = step.users
-		if err := bot.handle(context.Background(), privateMessage(t, step.user, "question")); err != nil {
+		if err := bot.process(context.Background(), update{ID: bot.offset, Message: privateMessage(t, step.user, "question")}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -265,7 +265,7 @@ func TestSendFormattedReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	bot.baseURL = server.URL
-	if err := bot.handle(context.Background(), privateMessage(t, 1, "Как проверить место?")); err != nil {
+	if err := bot.process(context.Background(), update{ID: bot.offset, Message: privateMessage(t, 1, "Как проверить место?")}); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()

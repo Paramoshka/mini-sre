@@ -106,3 +106,31 @@ func TestSessionFinalAnswerAfterFiveToolRounds(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoreRejectsIncompleteOrUnmatchedToolHistory(t *testing.T) {
+	user := agent.Message{Role: agent.RoleUser, Content: "question"}
+	call := agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "a", Name: "probe"}, {ID: "b", Name: "probe"}}}
+	resultA := agent.Message{Role: agent.RoleTool, ToolCallID: "a", Content: "result a"}
+	resultB := agent.Message{Role: agent.RoleTool, ToolCallID: "b", Content: "result b"}
+	final := agent.Message{Role: agent.RoleAssistant, Content: "answer"}
+	s := &Session{SystemPrompt: "current prompt", MaxHistoryTurns: 1}
+	valid := []agent.Message{user, call, resultB, resultA, final}
+	if err := s.Restore(append([]agent.Message{user, final}, valid...)); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.History) != 6 || s.History[0].Content != "current prompt" || s.History[2].ToolCalls[1].ID != "b" {
+		t.Fatal("restore did not keep current prompt and one complete tool turn")
+	}
+	for _, invalid := range [][]agent.Message{
+		{user}, {user, call}, {user, call, resultA, final},
+		{user, call, resultA, resultA, final}, {user, call, resultA, resultB},
+		{user, final, resultA}, {{Role: agent.RoleSystem}}, {{Role: "unknown"}},
+		{user, {Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{Name: "probe"}}}},
+		{user, {Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "a"}}}},
+		{user, {Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "a", Name: "probe"}, {ID: "a", Name: "probe"}}}},
+	} {
+		if err := s.Restore(invalid); err == nil || len(s.History) != 6 {
+			t.Fatalf("bad history accepted or existing context changed: %+v, %v", invalid, err)
+		}
+	}
+}

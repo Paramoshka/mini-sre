@@ -35,6 +35,48 @@ func (s *Session) Reset() {
 	s.History = []agent.Message{{Role: agent.RoleSystem, Content: prompt}}
 }
 
+// Restore accepts completed turns without a system message and uses the current prompt.
+func (s *Session) Restore(history []agent.Message) error {
+	expected := agent.RoleUser
+	var pending map[string]bool
+	for _, message := range history {
+		if message.Role != expected {
+			return errors.New("session: history contains an invalid message sequence")
+		}
+		switch message.Role {
+		case agent.RoleUser:
+			expected = agent.RoleAssistant
+		case agent.RoleAssistant:
+			expected = agent.RoleUser
+			if len(message.ToolCalls) > 0 {
+				pending = make(map[string]bool, len(message.ToolCalls))
+				for _, call := range message.ToolCalls {
+					if call.ID == "" || call.Name == "" || pending[call.ID] {
+						return errors.New("session: history contains an invalid tool call")
+					}
+					pending[call.ID] = true
+				}
+				expected = agent.RoleTool
+			}
+		case agent.RoleTool:
+			if !pending[message.ToolCallID] {
+				return errors.New("session: history contains an unmatched tool result")
+			}
+			delete(pending, message.ToolCallID)
+			if len(pending) == 0 {
+				expected = agent.RoleAssistant
+			}
+		}
+	}
+	if expected != agent.RoleUser {
+		return errors.New("session: history contains an incomplete turn")
+	}
+	s.Reset()
+	s.History = append(s.History, history...)
+	s.trimHistory()
+	return nil
+}
+
 func (s *Session) Ask(ctx context.Context, input string) (response *agent.Response, err error) {
 	if s.Turn == nil {
 		return nil, errors.New("agent: model turn function is required")

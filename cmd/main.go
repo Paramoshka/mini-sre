@@ -30,14 +30,15 @@ func main() {
 
 func run() (err error) {
 	var (
-		model        = flag.String("model", "", "model ID (default deepseek-flash)")
-		baseURL      = flag.String("base-url", "", "API base URL (default https://api.deepseek.com)")
-		temperature  = flag.Float64("temperature", -1, "sampling temperature 0..2 (-1 = server default)")
-		thinking     = flag.Bool("thinking", false, "enable thinking mode")
-		reasoning    = flag.Bool("reasoning", false, "print reasoning content to stderr")
-		stream       = flag.Bool("stream", true, "stream tokens as they arrive")
-		configPath   = flag.String("config", "", "host and Telegram configuration YAML (default local only)")
-		telegramMode = flag.Bool("telegram", false, "run the Telegram bot instead of the console")
+		model         = flag.String("model", "", "model ID (default deepseek-flash)")
+		baseURL       = flag.String("base-url", "", "API base URL (default https://api.deepseek.com)")
+		temperature   = flag.Float64("temperature", -1, "sampling temperature 0..2 (-1 = server default)")
+		thinking      = flag.Bool("thinking", false, "enable thinking mode")
+		reasoning     = flag.Bool("reasoning", false, "print reasoning content to stderr")
+		stream        = flag.Bool("stream", true, "stream tokens as they arrive")
+		configPath    = flag.String("config", "", "host and Telegram configuration YAML (default local only)")
+		telegramMode  = flag.Bool("telegram", false, "run the Telegram bot instead of the console")
+		telegramState = flag.String("telegram-state", "", "Telegram state file (default $XDG_STATE_HOME/mini-sre/telegram.json or ~/.local/state/mini-sre/telegram.json)")
 	)
 	flag.Parse()
 
@@ -85,6 +86,16 @@ func run() (err error) {
 				return &session.Session{Turn: client.Chat, Tools: toolSpecs(), RunTool: toolRunner(hostConfig.Current)}
 			}, os.Stderr)
 		if err != nil {
+			return err
+		}
+		statePath := *telegramState
+		if statePath == "" {
+			statePath, err = telegram.DefaultStatePath()
+			if err != nil {
+				return err
+			}
+		}
+		if err := bot.UseState(statePath); err != nil {
 			return err
 		}
 		return bot.Run(ctx)

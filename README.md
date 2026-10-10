@@ -50,6 +50,7 @@ go build -o mini-sre ./cmd
 | `-stream` | `true` | print the answer as it is generated |
 | `-config` | empty | YAML file with SSH hosts and Telegram allowed user IDs; empty means local only |
 | `-telegram` | `false` | run the bot instead of the console; requires `-config` |
+| `-telegram-state` | XDG state directory or `~/.local/state/mini-sre/telegram.json` | JSON state file used only in Telegram mode |
 
 The key is read from the `DEEPSEEK_API_KEY` environment variable, never from
 arguments. On startup the CLI loads `.env` from the current directory if present;
@@ -163,9 +164,29 @@ The bot accepts text and forwarded text in personal chats from allowed users.
 Other senders, groups and non-text messages are ignored before calling the model.
 Use `/start` for help and `/clear` to reset the chat. Requests are processed
 sequentially; histories are separate per chat and retain the last 20 completed
-requests, including their tool calls. Histories and the local polling offset are
-not persisted across restarts. Telegram may redeliver an update if the process
-stops before acknowledging it.
+requests, including their tool calls, results and reasoning. Histories and the
+polling offset are persisted in `$XDG_STATE_HOME/mini-sre/telegram.json`, or
+`~/.local/state/mini-sre/telegram.json` when `XDG_STATE_HOME` is unset. Override
+the file with `-telegram-state PATH`; dedicate one state file to one bot process.
+The example user service uses this default without unit changes. CLI history
+remains in memory.
+
+Each processed update is checkpointed before sending its reply, using a synced
+temporary file, atomic rename and directory sync. New state directories have
+mode `0700` and the state file has mode `0600`; existing parent directories are
+not chmodded. The file contains conversation and diagnostic data. On startup,
+a missing file creates a fresh state; invalid JSON, an unsupported format,
+incomplete tool-call histories or filesystem errors stop
+the bot with an error in its journal. A write failure during polling also stops
+the bot. `/clear` removes the saved context before confirming, but does not
+delete visible Telegram messages. Restored chats use the current system prompt.
+
+Offsets expire after 24 hours without a processed update, matching Telegram's
+update retention; chat context is retained. Already lost context cannot be
+reconstructed from the visible chat using the Bot API. An interrupted model
+request is not checkpointed and may be redelivered. A crash after checkpointing
+but before sending can leave a saved answer undelivered; the bot does not retry
+that update after restart. This is not an exactly-once delivery guarantee.
 
 Telegram receives final answers with fenced code blocks, inline code and
 `**bold**` text converted to native Telegram entities. Command contents are

@@ -14,15 +14,19 @@ import (
 	"mini-sre/internal/session"
 )
 
+const maxHistoryTurns = 20
+
 type Bot struct {
-	token      string
-	users      func() []int64
-	newSession func() *session.Session
-	sessions   map[int64]*session.Session
-	errOut     io.Writer
-	client     *http.Client
-	baseURL    string
-	offset     int64
+	token         string
+	users         func() []int64
+	newSession    func() *session.Session
+	sessions      map[int64]*session.Session
+	errOut        io.Writer
+	client        *http.Client
+	baseURL       string
+	offset        int64
+	statePath     string
+	offsetSavedAt time.Time
 }
 
 type update struct {
@@ -79,6 +83,10 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	delay := time.Second
 	for ctx.Err() == nil {
+		// Telegram expires queued updates after 24h and can later reuse lower IDs.
+		if b.offset != 0 && time.Since(b.offsetSavedAt) >= 24*time.Hour {
+			b.offset = 0
+		}
 		var updates []update
 		err := b.call(ctx, "getUpdates", map[string]any{
 			"offset": b.offset, "timeout": 30, "allowed_updates": []string{"message"},
@@ -106,7 +114,11 @@ func (b *Bot) Run(ctx context.Context) error {
 			if u.ID < b.offset {
 				continue
 			}
-			if err := b.handle(ctx, u.Message); err != nil {
+			if err := b.process(ctx, u); err != nil {
+				var stateErr *stateError
+				if errors.As(err, &stateErr) {
+					return err
+				}
 				if ctx.Err() != nil {
 					return nil
 				}
@@ -116,48 +128,66 @@ func (b *Bot) Run(ctx context.Context) error {
 				}
 				b.log(err)
 			}
-			b.offset = u.ID + 1
 		}
 	}
 	return nil
 }
 
-func (b *Bot) handle(ctx context.Context, m *message) error {
-	if m == nil || m.From == nil || m.Chat.Type != "private" || !slices.Contains(b.users(), m.From.ID) || strings.TrimSpace(m.Text) == "" {
+func (b *Bot) process(ctx context.Context, u update) error {
+	text, err := b.handle(ctx, u.Message)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	nextOffset, savedAt := u.ID+1, time.Now().UTC()
+	if err := b.saveState(nextOffset, savedAt); err != nil {
+		return err
+	}
+	b.offset, b.offsetSavedAt = nextOffset, savedAt
+	if text == "" {
 		return nil
+	}
+	return b.send(ctx, u.Message.Chat.ID, text)
+}
+
+func (b *Bot) handle(ctx context.Context, m *message) (string, error) {
+	if m == nil || m.From == nil || m.Chat.Type != "private" || !slices.Contains(b.users(), m.From.ID) || strings.TrimSpace(m.Text) == "" {
+		return "", nil
 	}
 	input := strings.TrimSpace(m.Text)
 	switch input {
 	case "/start":
-		return b.send(ctx, m.Chat.ID, "Пришли запрос или перешли сообщение о проблеме. Укажи сервер и сервис; local — машина агента. /clear очищает историю.")
+		return "Пришли запрос или перешли сообщение о проблеме. Укажи сервер и сервис; local — машина агента. /clear очищает историю.", nil
 	case "/clear":
 		if s := b.sessions[m.Chat.ID]; s != nil {
 			s.Reset()
 		}
-		return b.send(ctx, m.Chat.ID, "История очищена.")
+		return "История очищена.", nil
 	}
 	if strings.HasPrefix(input, "/") {
-		return b.send(ctx, m.Chat.ID, "Неизвестная команда. /start — помощь, /clear — очистить историю.")
+		return "Неизвестная команда. /start — помощь, /clear — очистить историю.", nil
 	}
 	s := b.sessions[m.Chat.ID]
 	if s == nil {
 		s = b.newSession()
-		s.MaxHistoryTurns = 20
+		s.MaxHistoryTurns = maxHistoryTurns
 		b.sessions[m.Chat.ID] = s
 	}
 	resp, err := s.Ask(ctx, input)
 	if err != nil {
 		b.log(err)
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return "", ctx.Err()
 		}
-		return b.send(ctx, m.Chat.ID, "Не удалось выполнить запрос. Подробности — в журнале агента.")
+		return "Не удалось выполнить запрос. Подробности — в журнале агента.", nil
 	}
 	text := resp.Content
 	if strings.TrimSpace(text) == "" {
 		text = "Модель вернула пустой ответ. Попробуй уточнить запрос."
 	}
-	return b.send(ctx, m.Chat.ID, text)
+	return text, nil
 }
 
 func (b *Bot) send(ctx context.Context, chatID int64, text string) error {

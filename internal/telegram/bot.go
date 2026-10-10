@@ -166,26 +166,6 @@ func (b *Bot) send(ctx context.Context, chatID int64, text string) error {
 	return nil
 }
 
-func splitText(text string) []string {
-	var parts []string
-	start, units := 0, 0
-	for i, r := range text {
-		n := 1
-		if r > 0xffff {
-			n = 2
-		}
-		if units+n > 4000 {
-			parts = append(parts, text[start:i])
-			start, units = i, 0
-		}
-		units += n
-	}
-	if start < len(text) {
-		parts = append(parts, text[start:])
-	}
-	return parts
-}
-
 func (b *Bot) log(err error) {
 	if b.errOut != nil {
 		fmt.Fprintln(b.errOut, strings.ReplaceAll(err.Error(), b.token, "[redacted]"))

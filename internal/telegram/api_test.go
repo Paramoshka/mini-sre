@@ -20,7 +20,7 @@ func TestRateLimitAndTokenRedaction(t *testing.T) {
 		io.WriteString(w, `{"ok":false,"error_code":429,"description":"secret-token rate limited","parameters":{"retry_after":3600}}`)
 	}))
 	defer server.Close()
-	bot, err := New("secret-token", []int64{1}, nil, io.Discard)
+	bot, err := New("secret-token", func() []int64 { return []int64{1} }, nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestAuthenticationErrorsAreNotRetried(t *testing.T) {
 				io.WriteString(w, "not JSON")
 			}))
 			defer server.Close()
-			bot, err := New("secret-token", []int64{1}, nil, io.Discard)
+			bot, err := New("secret-token", func() []int64 { return []int64{1} }, nil, io.Discard)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,11 +67,11 @@ func TestAuthenticationErrorsAreNotRetried(t *testing.T) {
 
 func TestBotRequiresCredentialsAndAllowlist(t *testing.T) {
 	for _, users := range [][]int64{nil, {0}, {-1}} {
-		if _, err := New("token", users, nil, io.Discard); err == nil {
+		if _, err := New("token", func() []int64 { return users }, nil, io.Discard); err == nil {
 			t.Fatal("invalid allowlist accepted")
 		}
 	}
-	if _, err := New("", []int64{1}, nil, io.Discard); err == nil {
+	if _, err := New("", func() []int64 { return []int64{1} }, nil, io.Discard); err == nil {
 		t.Fatal("empty token accepted")
 	}
 }

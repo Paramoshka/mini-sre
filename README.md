@@ -79,7 +79,16 @@ directory. Omit `known_hosts` to use the current user's `~/.ssh/known_hosts`.
 The file must contain the server's independently verified host key; unknown or
 changed host keys are rejected. The agent does not add keys automatically.
 
-Configuration is loaded once at startup. Key files and `known_hosts` are read
+With `-config`, the YAML is watched and reloaded after saving, including when an
+editor atomically replaces the file. Hosts, `known_hosts` and Telegram allowed
+user IDs are published together. Invalid YAML, a temporarily missing file, or an
+empty Telegram allowlist in bot mode is logged without replacing the last valid
+configuration. A fatal watcher error stops the process. Each probe uses one
+configuration snapshot for its connection and password redaction; the next probe
+uses the updated settings. Revoking Telegram access blocks subsequent requests
+without deleting the user's history. `.env` and model settings remain startup-only.
+
+Key files and `known_hosts` are read
 when making a connection, so one unavailable remote host does not disable local
 checks. YAML syntax, unknown fields, invalid ports and conflicting credentials
 are rejected at startup. Host IDs are exposed to the model; addresses, passwords,

@@ -14,7 +14,6 @@ import (
 
 	"mini-sre/internal/agent"
 	"mini-sre/internal/config"
-	"mini-sre/internal/remote"
 	"mini-sre/internal/session"
 )
 
@@ -94,9 +93,31 @@ func TestConfiguredAgentUsesProbesWithoutExposingCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &session.Session{Turn: client.Chat, Tools: toolSpecs(), RunTool: toolRunner(&remote.Runner{Config: cfg})}
+	s := &session.Session{Turn: client.Chat, Tools: toolSpecs(), RunTool: toolRunner(func() config.Config { return cfg })}
 	resp, err := s.Ask(context.Background(), "Проверь local")
 	if err != nil || resp.Content != "Проверено" || requests.Load() != 2 {
 		t.Fatalf("agent/tools flow: response=%+v err=%v requests=%d", resp, err, requests.Load())
+	}
+}
+
+func TestToolRunnerPinsConfigForRedaction(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "journalctl"), []byte("#!/bin/sh\nprintf 'old-secret\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	cfg := config.Config{Hosts: map[string]config.Host{"old": {Password: "old-secret"}}}
+	run := toolRunner(func() config.Config {
+		snapshot := cfg
+		cfg = config.Config{Hosts: map[string]config.Host{"new": {Password: "new-secret"}}}
+		return snapshot
+	})
+	out, err := run(context.Background(), agent.ToolCall{Name: "get_service_logs", Arguments: "{}"})
+	if err != nil || strings.Contains(out, "old-secret") || !strings.Contains(out, "[redacted]") {
+		t.Fatalf("tool did not redact with its original snapshot: %q, %v", out, err)
+	}
+	out, err = run(context.Background(), agent.ToolCall{Name: "list_hosts"})
+	if err != nil || out != "local\nnew" {
+		t.Fatalf("next call did not use new hosts: %q, %v", out, err)
 	}
 }

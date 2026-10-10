@@ -62,7 +62,7 @@ func TestAccessAndChatHistory(t *testing.T) {
 			return &agent.Response{Content: "answer"}, nil
 		}}
 	}
-	bot, err := New("secret-token", []int64{1, 2}, factory, io.Discard)
+	bot, err := New("secret-token", func() []int64 { return []int64{1, 2} }, factory, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestPollingOffsetRetriesAndDuplicates(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	bot, err := New("secret-token", []int64{1}, func() *session.Session {
+	bot, err := New("secret-token", func() []int64 { return []int64{1} }, func() *session.Session {
 		return &session.Session{Turn: func(context.Context, agent.Request) (*agent.Response, error) {
 			modelCalls++
 			return &agent.Response{Content: "done"}, nil
@@ -161,6 +161,37 @@ func TestPollingOffsetRetriesAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestAccessReloadPreservesHistory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	users := []int64{1}
+	calls := 0
+	bot, err := New("token", func() []int64 { return users }, func() *session.Session {
+		return &session.Session{Turn: func(context.Context, agent.Request) (*agent.Response, error) {
+			calls++
+			return &agent.Response{Content: "answer"}, nil
+		}}
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.baseURL = server.URL
+	for _, step := range []struct {
+		users []int64
+		user  int64
+	}{{[]int64{1}, 1}, {[]int64{2}, 1}, {[]int64{2}, 2}, {[]int64{1, 2}, 1}} {
+		users = step.users
+		if err := bot.handle(context.Background(), privateMessage(t, step.user, "question")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 || len(bot.sessions[1].History) != 5 || len(bot.sessions[2].History) != 3 {
+		t.Fatal("access reload failed or discarded chat history")
+	}
+}
+
 func TestWebhookAndShutdown(t *testing.T) {
 	for _, webhook := range []bool{true, false} {
 		t.Run(fmt.Sprintf("webhook=%v", webhook), func(t *testing.T) {
@@ -180,7 +211,7 @@ func TestWebhookAndShutdown(t *testing.T) {
 				<-r.Context().Done()
 			}))
 			defer server.Close()
-			bot, err := New("secret-token", []int64{1}, nil, io.Discard)
+			bot, err := New("secret-token", func() []int64 { return []int64{1} }, nil, io.Discard)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -225,7 +256,7 @@ func TestSendFormattedReply(t *testing.T) {
 		io.WriteString(w, `{"ok":true,"result":{}}`)
 	}))
 	defer server.Close()
-	bot, err := New("test-token", []int64{1}, func() *session.Session {
+	bot, err := New("test-token", func() []int64 { return []int64{1} }, func() *session.Session {
 		return &session.Session{Turn: func(context.Context, agent.Request) (*agent.Response, error) {
 			return &agent.Response{Content: "**SSH**\n```bash\necho '<tag> & 🙂'\n```\n" + strings.Repeat("`df -h`\n", 800)}, nil
 		}}

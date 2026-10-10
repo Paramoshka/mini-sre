@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ import (
 
 type Bot struct {
 	token      string
-	allowed    map[int64]bool
+	users      func() []int64
 	newSession func() *session.Session
 	sessions   map[int64]*session.Session
 	errOut     io.Writer
@@ -40,22 +41,24 @@ type message struct {
 	} `json:"chat"`
 }
 
-func New(token string, users []int64, newSession func() *session.Session, errOut io.Writer) (*Bot, error) {
+func New(token string, users func() []int64, newSession func() *session.Session, errOut io.Writer) (*Bot, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("telegram: TELEGRAM_BOT_TOKEN is required")
 	}
-	if len(users) == 0 {
+	if users == nil {
 		return nil, errors.New("telegram: allowed_user_ids must not be empty")
 	}
-	allowed := make(map[int64]bool, len(users))
-	for _, id := range users {
+	initialUsers := users()
+	if len(initialUsers) == 0 {
+		return nil, errors.New("telegram: allowed_user_ids must not be empty")
+	}
+	for _, id := range initialUsers {
 		if id <= 0 {
 			return nil, errors.New("telegram: allowed_user_ids must be positive")
 		}
-		allowed[id] = true
 	}
 	return &Bot{
-		token: token, allowed: allowed, newSession: newSession,
+		token: token, users: users, newSession: newSession,
 		sessions: make(map[int64]*session.Session), errOut: errOut,
 		client: &http.Client{Timeout: 45 * time.Second}, baseURL: "https://api.telegram.org",
 	}, nil
@@ -120,7 +123,7 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) handle(ctx context.Context, m *message) error {
-	if m == nil || m.From == nil || m.Chat.Type != "private" || !b.allowed[m.From.ID] || strings.TrimSpace(m.Text) == "" {
+	if m == nil || m.From == nil || m.Chat.Type != "private" || !slices.Contains(b.users(), m.From.ID) || strings.TrimSpace(m.Text) == "" {
 		return nil
 	}
 	input := strings.TrimSpace(m.Text)

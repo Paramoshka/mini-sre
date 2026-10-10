@@ -122,11 +122,15 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 	}
 	clientConn, channels, requests, err := ssh.NewClientConn(conn, address, &ssh.ClientConfig{
 		User: host.User, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: verify,
+		HostKeyAlgorithms: knownHostAlgorithms(verify, address, conn.RemoteAddr()),
 	})
 	if err != nil {
 		var keyErr *knownhosts.KeyError
 		if errors.As(err, &keyErr) {
-			return errors.New("SSH host key is unknown or does not match known_hosts")
+			if len(keyErr.Want) == 0 {
+				return errors.New("SSH host key is unknown in known_hosts")
+			}
+			return errors.New("SSH host key does not match known_hosts")
 		}
 		return errors.New("SSH handshake or authentication failed")
 	}
@@ -143,6 +147,46 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 		command += " " + shellQuote(arg)
 	}
 	return session.Run(command)
+}
+
+func knownHostAlgorithms(verify ssh.HostKeyCallback, address string, remote net.Addr) []string {
+	// A deliberately invalid key makes knownhosts return all keys for this address.
+	// Reuse its matching rules for hashed hosts, aliases, and nonstandard ports.
+	var keyErr *knownhosts.KeyError
+	if !errors.As(verify(address, remote, hostKeyProbe{}), &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+	knownTypes := make(map[string]bool)
+	for _, key := range keyErr.Want {
+		knownTypes[key.Key.Type()] = true
+	}
+	if knownTypes[ssh.KeyAlgoRSA] {
+		knownTypes[ssh.KeyAlgoRSASHA256] = true
+		knownTypes[ssh.KeyAlgoRSASHA512] = true
+	}
+	algorithms := append(ssh.SupportedAlgorithms().HostKeys, ssh.InsecureAlgorithms().HostKeys...)
+	priority := func(algorithm string) int {
+		// Preserve certificate negotiation for @cert-authority entries.
+		if strings.Contains(algorithm, "-cert-") {
+			return 0
+		}
+		if knownTypes[algorithm] {
+			return 1
+		}
+		return 2
+	}
+	sort.SliceStable(algorithms, func(i, j int) bool {
+		return priority(algorithms[i]) < priority(algorithms[j])
+	})
+	return algorithms
+}
+
+type hostKeyProbe struct{}
+
+func (hostKeyProbe) Type() string    { return "" }
+func (hostKeyProbe) Marshal() []byte { return nil }
+func (hostKeyProbe) Verify([]byte, *ssh.Signature) error {
+	return errors.New("host key probe cannot verify signatures")
 }
 
 func shellQuote(value string) string {

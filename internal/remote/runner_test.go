@@ -2,8 +2,11 @@ package remote
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -142,7 +145,99 @@ func TestSSHHandshakeCancellation(t *testing.T) {
 	<-done
 }
 
-func testSSH(t *testing.T, useKey bool) *Runner {
+func TestSSHKnownHostKeyPreference(t *testing.T) {
+	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaSigner, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edSigner, err := ssh.NewSignerFromKey(edPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPrivate, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaSigner, err := ssh.NewSignerFromKey(rsaPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, keys := range [][]ssh.Signer{
+		{edSigner, ecdsaSigner},
+		{rsaSigner, ecdsaSigner},
+		{ecdsaSigner, rsaSigner},
+	} {
+		for _, hashed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/hashed=%v", keys[0].PublicKey().Type(), hashed), func(t *testing.T) {
+				r := testSSH(t, true, keys...)
+				if hashed {
+					h := r.Config.Hosts["web"]
+					address := net.JoinHostPort(h.Address, fmt.Sprint(h.Port))
+					line := knownhosts.Line([]string{address}, keys[0].PublicKey())
+					fields := strings.SplitN(line, " ", 2)
+					line = knownhosts.HashHostname(fields[0]) + " " + fields[1] + "\n"
+					if err := os.WriteFile(r.Config.KnownHosts, []byte(line), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				result, err := r.Run(context.Background(), "web", "printf", "%s", "connected")
+				if err != nil || result.Stdout != "connected" {
+					t.Fatalf("only first server key is trusted: %+v, %v", result, err)
+				}
+			})
+		}
+	}
+}
+
+func TestSSHHostCertificate(t *testing.T) {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostPrivate, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &ssh.Certificate{
+		Key: hostSigner.PublicKey(), CertType: ssh.HostCert,
+		ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: ssh.CertTimeInfinity,
+	}
+	if err := certificate.SignCert(rand.Reader, authority); err != nil {
+		t.Fatal(err)
+	}
+	certificateSigner, err := ssh.NewCertSigner(certificate, hostSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := testSSH(t, true, certificateSigner, hostSigner)
+	h := r.Config.Hosts["web"]
+	address := net.JoinHostPort(h.Address, fmt.Sprint(h.Port))
+	line := "@cert-authority " + knownhosts.Line([]string{address}, authority.PublicKey()) + "\n"
+	if err := os.WriteFile(r.Config.KnownHosts, []byte(line), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(context.Background(), "web", "true"); err != nil {
+		t.Fatalf("trusted certificate with a different CA key type: %v", err)
+	}
+}
+
+func testSSH(t *testing.T, useKey bool, hostKeys ...ssh.Signer) *Runner {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -166,7 +261,12 @@ func testSSH(t *testing.T, useKey bool) *Runner {
 			return nil, nil
 		},
 	}
-	serverConfig.AddHostKey(signer)
+	if len(hostKeys) == 0 {
+		hostKeys = []ssh.Signer{signer}
+	}
+	for _, hostKey := range hostKeys {
+		serverConfig.AddHostKey(hostKey)
+	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +284,7 @@ func testSSH(t *testing.T, useKey bool) *Runner {
 	t.Cleanup(func() { l.Close(); wg.Wait() })
 	dir := t.TempDir()
 	knownFile := filepath.Join(dir, "known_hosts")
-	line := knownhosts.Line([]string{l.Addr().String()}, signer.PublicKey()) + "\n"
+	line := knownhosts.Line([]string{l.Addr().String()}, hostKeys[0].PublicKey()) + "\n"
 	if err := os.WriteFile(knownFile, []byte(line), 0600); err != nil {
 		t.Fatal(err)
 	}

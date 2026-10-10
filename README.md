@@ -179,6 +179,27 @@ polling, so the nettop needs access to Telegram and DeepSeek, without a public
 HTTP endpoint. A pre-existing webhook causes a clear startup error and is not
 removed automatically. Run only one polling process per bot token.
 
+To use an HTTP proxy only for Telegram, add this startup setting to `.env`:
+
+```dotenv
+TELEGRAM_HTTP_PROXY=http://127.0.0.1:8080
+```
+
+For a proxy that requires a username and password:
+
+```dotenv
+TELEGRAM_HTTP_PROXY=http://user:password@proxy.example:8080
+```
+
+Replace `user` and `password` with the proxy credentials. Percent-encode special
+characters in credentials, for example `@` as `%40` and `#` as `%23`.
+HTTP and HTTPS proxy URLs are supported. Restart the bot after changing it.
+This setting takes precedence over `HTTPS_PROXY` and `NO_PROXY` for Telegram;
+it does not change the model client's transport. If unset or empty, the bot
+uses Go's standard `HTTPS_PROXY` / `NO_PROXY` environment settings. Global
+proxy settings can also affect DeepSeek requests. Invalid Telegram proxy URLs
+stop startup without printing the URL or its credentials.
+
 The bot accepts text and forwarded text in personal chats from allowed users.
 Other senders, groups and non-text messages are ignored before calling the model.
 Use `/start` for help and `/clear` to reset the chat. Requests are processed
@@ -217,6 +238,14 @@ features. Network polling failures retry with a delay capped at 30 seconds;
 Telegram's longer `retry_after` is respected. Replies use at most three delivery
 attempts; delivery failures are logged and do not rerun the model. A network
 failure after Telegram accepted a reply can result in a duplicate reply.
+
+For ordinary chat requests, the journal records each model call and diagnostic
+tool's start and duration, followed by state checkpoint and reply delivery
+durations. Entries include the update ID and failure status; timing entries
+omit message text, tool arguments and results. Model durations include SDK
+retries. These timings begin after the bot picks up an update and do not
+measure its time waiting in Telegram's queue. Scheduled checks do not emit
+these stage timings.
 
 CLI and Telegram are independent processes sharing the same configuration and
 probe code, not the same conversation history. Send SIGINT/SIGTERM to stop the

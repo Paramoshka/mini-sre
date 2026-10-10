@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,58 @@ import (
 	"mini-sre/internal/agent"
 	"mini-sre/internal/session"
 )
+
+func TestRequestTimingLogs(t *testing.T) {
+	var logs bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	turns := 0
+	bot, err := New("secret-token", func() []int64 { return []int64{1} }, func() *session.Session {
+		return &session.Session{
+			Turn: func(_ context.Context, req agent.Request) (*agent.Response, error) {
+				turns++
+				if req.Messages[len(req.Messages)-1].Role == agent.RoleUser {
+					return &agent.Response{ToolCalls: []agent.ToolCall{{ID: "probe", Name: "get_load_average", Arguments: "private-arguments"}}}, nil
+				}
+				return &agent.Response{Content: "private-answer"}, nil
+			},
+			RunTool: func(context.Context, agent.ToolCall) (string, error) {
+				return "private-result", nil
+			},
+		}
+	}, &logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.baseURL = server.URL
+	if err := bot.UseState(t.TempDir() + "/state.json"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{1, 2} {
+		logs.Reset()
+		if err := bot.process(context.Background(), update{ID: id, Message: privateMessage(t, 1, "private-input")}); err != nil {
+			t.Fatal(err)
+		}
+		output := logs.String()
+		for _, stage := range []struct {
+			name  string
+			count int
+		}{{"model", 2}, {"tool name=\"get_load_average\"", 1}, {"state", 1}, {"send", 1}} {
+			prefix := fmt.Sprintf("telegram: update=%d stage=%s duration=", id, stage.name)
+			if strings.Count(output, prefix) != stage.count {
+				t.Fatalf("missing or duplicate stage timings: %s", output)
+			}
+		}
+		if strings.Contains(output, "private-") || strings.Contains(output, "secret-token") || strings.Contains(output, "failed=true") {
+			t.Fatalf("unexpected log contents: %s", output)
+		}
+	}
+	if turns != 4 {
+		t.Fatalf("model calls = %d, want 4", turns)
+	}
+}
 
 type sentMessage struct {
 	ChatID    int64           `json:"chat_id"`

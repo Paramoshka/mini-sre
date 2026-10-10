@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"mini-sre/internal/agent"
 	"mini-sre/internal/session"
 )
 
@@ -64,10 +67,20 @@ func New(token string, users func() []int64, newSession func() *session.Session,
 			return nil, errors.New("telegram: allowed_user_ids must be positive")
 		}
 	}
+	client := &http.Client{Timeout: 45 * time.Second}
+	if proxy := strings.TrimSpace(os.Getenv("TELEGRAM_HTTP_PROXY")); proxy != "" {
+		proxyURL, err := url.Parse(proxy)
+		if err != nil || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") || proxyURL.Hostname() == "" {
+			return nil, errors.New("telegram: TELEGRAM_HTTP_PROXY must be an http:// or https:// proxy URL")
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = http.ProxyURL(proxyURL)
+		client.Transport = transport
+	}
 	return &Bot{
 		token: token, users: users, newSession: newSession,
 		sessions: make(map[int64]*session.Session), errOut: errOut,
-		client: &http.Client{Timeout: 45 * time.Second}, baseURL: "https://api.telegram.org",
+		client: client, baseURL: "https://api.telegram.org",
 	}, nil
 }
 
@@ -160,14 +173,23 @@ func (b *Bot) process(ctx context.Context, u update) error {
 		return err
 	}
 	nextOffset, savedAt := u.ID+1, time.Now().UTC()
-	if err := b.saveState(nextOffset, savedAt); err != nil {
+	started := time.Now()
+	err = b.saveState(nextOffset, savedAt)
+	if text != "" {
+		b.log(fmt.Errorf("telegram: update=%d stage=state duration=%s failed=%t", u.ID, time.Since(started), err != nil))
+	}
+	if err != nil {
 		return err
 	}
 	b.offset, b.offsetSavedAt = nextOffset, savedAt
 	if text == "" {
 		return nil
 	}
-	return b.send(ctx, u.Message.Chat.ID, text)
+	started = time.Now()
+	b.log(fmt.Errorf("telegram: update=%d stage=send started", u.ID))
+	err = b.send(ctx, u.Message.Chat.ID, text)
+	b.log(fmt.Errorf("telegram: update=%d stage=send duration=%s failed=%t", u.ID, time.Since(started), err != nil))
+	return err
 }
 
 func (b *Bot) handle(ctx context.Context, m *message, updateID int64) (string, error) {
@@ -198,6 +220,28 @@ func (b *Bot) handle(ctx context.Context, m *message, updateID int64) (string, e
 		s = b.newSession()
 		s.MaxHistoryTurns = maxHistoryTurns
 		b.sessions[m.Chat.ID] = s
+	}
+	turn, runTool := s.Turn, s.RunTool
+	defer func() {
+		s.Turn, s.RunTool = turn, runTool
+	}()
+	if turn != nil {
+		s.Turn = func(ctx context.Context, req agent.Request) (*agent.Response, error) {
+			started := time.Now()
+			b.log(fmt.Errorf("telegram: update=%d stage=model started", updateID))
+			resp, err := turn(ctx, req)
+			b.log(fmt.Errorf("telegram: update=%d stage=model duration=%s failed=%t", updateID, time.Since(started), err != nil))
+			return resp, err
+		}
+	}
+	if runTool != nil {
+		s.RunTool = func(ctx context.Context, call agent.ToolCall) (string, error) {
+			started := time.Now()
+			b.log(fmt.Errorf("telegram: update=%d stage=tool name=%q started", updateID, call.Name))
+			out, err := runTool(ctx, call)
+			b.log(fmt.Errorf("telegram: update=%d stage=tool name=%q duration=%s failed=%t", updateID, call.Name, time.Since(started), err != nil))
+			return out, err
+		}
 	}
 	resp, err := s.Ask(ctx, input)
 	if err != nil {

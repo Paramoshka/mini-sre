@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -90,6 +91,7 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 	if host.KeyFile != "" {
 		key, err := os.ReadFile(host.KeyFile)
 		if err != nil {
+			log.Printf("SSH host=%q phase=key_file error=%q", r.Redact(id), r.Redact(err.Error()))
 			return errors.New("cannot read SSH key file")
 		}
 		signer, err := ssh.ParsePrivateKey(key)
@@ -102,6 +104,7 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 	}
 	verify, err := knownhosts.New(r.Config.KnownHosts)
 	if err != nil {
+		log.Printf("SSH host=%q phase=known_hosts error=%q", r.Redact(id), r.Redact(err.Error()))
 		return errors.New("cannot load known_hosts file")
 	}
 	port := host.Port
@@ -111,6 +114,7 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 	address := net.JoinHostPort(host.Address, strconv.Itoa(port))
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	if err != nil {
+		log.Printf("SSH host=%q phase=connect error=%q", r.Redact(id), r.Redact(err.Error()))
 		return errors.New("cannot connect to SSH server")
 	}
 	defer conn.Close()
@@ -125,6 +129,7 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 		HostKeyAlgorithms: knownHostAlgorithms(verify, address, conn.RemoteAddr()),
 	})
 	if err != nil {
+		log.Printf("SSH host=%q phase=handshake error=%q", r.Redact(id), r.Redact(err.Error()))
 		var keyErr *knownhosts.KeyError
 		if errors.As(err, &keyErr) {
 			if len(keyErr.Want) == 0 {
@@ -138,6 +143,7 @@ func (r *Runner) runSSH(ctx context.Context, id, program string, args []string, 
 	defer client.Close()
 	session, err := client.NewSession()
 	if err != nil {
+		log.Printf("SSH host=%q phase=session error=%q", r.Redact(id), r.Redact(err.Error()))
 		return errors.New("cannot open SSH session")
 	}
 	defer session.Close()

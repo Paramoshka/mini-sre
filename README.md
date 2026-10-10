@@ -85,6 +85,12 @@ checks. YAML syntax, unknown fields, invalid ports and conflicting credentials
 are rejected at startup. Host IDs are exposed to the model; addresses, passwords,
 key paths and key contents are not included in the host listing or prompts.
 
+SSH connection failures are logged to stderr with the host ID, connection stage,
+and underlying error. Configured passwords are redacted. For the user service,
+read these diagnostics with `journalctl --user -u mini-sre.service -n 50`.
+Detailed errors may include local file paths and server addresses; they are not
+sent to the model.
+
 ## Diagnostic tools
 
 All probes except `list_hosts` accept `host_id`, defaulting to `local`.

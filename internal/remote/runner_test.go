@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -362,6 +364,10 @@ func serveSSH(conn net.Conn, cfg *ssh.ServerConfig) {
 }
 
 func TestSSHAuthenticationFailure(t *testing.T) {
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 	r := testSSH(t, false)
 	h := r.Config.Hosts["web"]
 	h.Password = "wrong-secret"
@@ -370,8 +376,35 @@ func TestSSHAuthenticationFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "authentication") || strings.Contains(err.Error(), h.Password) {
 		t.Fatalf("authentication failure: %v", err)
 	}
+	if !strings.Contains(logs.String(), `host="web" phase=handshake`) ||
+		!strings.Contains(logs.String(), "attempted methods [none password]") ||
+		strings.Contains(logs.String(), h.Password) {
+		t.Fatalf("authentication diagnostic: %s", logs.String())
+	}
 	if got := r.Hosts(); strings.Join(got, ",") != "local,web" {
 		t.Fatal(got)
+	}
+}
+
+func TestSSHLogsRedactConnectionErrors(t *testing.T) {
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	r := testSSH(t, false)
+	h := r.Config.Hosts["web"]
+	// The dial error includes this invalid port, so it must be redacted in logs.
+	h.Port = 65536
+	h.Password = "65536"
+	r.Config.Hosts["web"] = h
+	_, err := r.Run(context.Background(), "web", "true")
+	if err == nil || !strings.Contains(err.Error(), "cannot connect") {
+		t.Fatalf("connection error: %v", err)
+	}
+	if !strings.Contains(logs.String(), "phase=connect") ||
+		!strings.Contains(logs.String(), "[redacted]") ||
+		strings.Contains(logs.String(), h.Password) {
+		t.Fatalf("redacted connection diagnostic: %s", logs.String())
 	}
 }
 

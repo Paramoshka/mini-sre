@@ -18,20 +18,20 @@ func entityText(t *testing.T, part messagePart, entity messageEntity) string {
 }
 
 func TestFormatReplyCommands(t *testing.T) {
-	input := "🙂 **Права**\n\n```bash\nsudo tee /home/mini-sre/.ssh/authorized_keys < ~/mini-sre.pub\nprintf '%s' '$HOME & <tag> **literal** `whoami`'\n```\n\nПроверь `journalctl --user -u mini-sre` и /proc/loadavg."
+	input := "🙂 **Permissions**\n\n```bash\nsudo tee /home/mini-sre/.ssh/authorized_keys < ~/mini-sre.pub\nprintf '%s' '$HOME & <tag> **literal** `whoami`'\n```\n\nCheck `journalctl --user -u mini-sre` and /proc/loadavg."
 	parts := formatReply(input)
 	if len(parts) != 1 {
 		t.Fatalf("parts=%d, want 1", len(parts))
 	}
 	part := parts[0]
-	want := "🙂 Права\n\nsudo tee /home/mini-sre/.ssh/authorized_keys < ~/mini-sre.pub\nprintf '%s' '$HOME & <tag> **literal** `whoami`'\n\nПроверь journalctl --user -u mini-sre и /proc/loadavg."
+	want := "🙂 Permissions\n\nsudo tee /home/mini-sre/.ssh/authorized_keys < ~/mini-sre.pub\nprintf '%s' '$HOME & <tag> **literal** `whoami`'\n\nCheck journalctl --user -u mini-sre and /proc/loadavg."
 	if part.Text != want {
 		t.Fatalf("formatted text=%q, want %q", part.Text, want)
 	}
 	if len(part.Entities) != 3 {
 		t.Fatalf("entities=%+v, want bold, pre, code", part.Entities)
 	}
-	if part.Entities[0].Type != "bold" || part.Entities[0].Offset != 3 || entityText(t, part, part.Entities[0]) != "Права" {
+	if part.Entities[0].Type != "bold" || part.Entities[0].Offset != 3 || entityText(t, part, part.Entities[0]) != "Permissions" {
 		t.Fatal("bold entity or UTF-16 offset incorrect")
 	}
 	if part.Entities[1].Type != "pre" || part.Entities[1].Language != "bash" || entityText(t, part, part.Entities[1]) != "sudo tee /home/mini-sre/.ssh/authorized_keys < ~/mini-sre.pub\nprintf '%s' '$HOME & <tag> **literal** `whoami`'\n" {
@@ -68,8 +68,8 @@ func TestFormatReplyEdgeCases(t *testing.T) {
 }
 
 func TestFormatReplySplitsLongCode(t *testing.T) {
-	code := strings.Repeat("echo 'Привет🙂 & <tag>'\n", 500)
-	parts := formatReply("**Команды**\n```bash\n" + code + "```\nГотово.")
+	code := strings.Repeat("echo 'Hello🙂 & <tag>'\n", 500)
+	parts := formatReply("**Commands**\n```bash\n" + code + "```\nDone.")
 	var all, formattedCode strings.Builder
 	for _, part := range parts {
 		if part.Text == "" || !utf8.ValidString(part.Text) || len(utf16.Encode([]rune(part.Text))) > 4000 {
@@ -86,7 +86,7 @@ func TestFormatReplySplitsLongCode(t *testing.T) {
 			}
 		}
 	}
-	if len(parts) < 2 || all.String() != "Команды\n"+code+"Готово." || formattedCode.String() != code {
+	if len(parts) < 2 || all.String() != "Commands\n"+code+"Done." || formattedCode.String() != code {
 		t.Fatal("splitting lost text or code formatting")
 	}
 	longLine := strings.Repeat("🙂", 4500)

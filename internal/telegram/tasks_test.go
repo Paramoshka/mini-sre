@@ -32,7 +32,7 @@ func testTasks(t *testing.T) (*Bot, *taskScheduler) {
 
 func addTestTask(t *testing.T, s *taskScheduler, every, report string) *scheduledTask {
 	t.Helper()
-	reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, updateID: 10, input: "/task add " + every + " " + report + " Проверяй nginx\nна web-1"})
+	reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, updateID: 10, input: "/task add " + every + " " + report + " Check nginx\non web-1"})
 	if reply.err != nil || len(s.file.Tasks) != 1 {
 		t.Fatalf("add: %+v; tasks: %+v", reply, s.file.Tasks)
 	}
@@ -63,7 +63,7 @@ func editTaskFile(t *testing.T, s *taskScheduler, edit func(*taskFile)) {
 func TestTaskCommandsOwnershipAndDuplicateUpdate(t *testing.T) {
 	_, s := testTasks(t)
 	task := addTestTask(t, s, "5m", "1h")
-	if task.Prompt != "Проверяй nginx\nна web-1" || task.State.NextRun.Sub(s.now()) != 5*time.Minute {
+	if task.Prompt != "Check nginx\non web-1" || task.State.NextRun.Sub(s.now()) != 5*time.Minute {
 		t.Fatalf("wrong prompt or deadline: %+v", task)
 	}
 	first := s.file.LastCommand.Reply
@@ -73,7 +73,7 @@ func TestTaskCommandsOwnershipAndDuplicateUpdate(t *testing.T) {
 	}
 	for _, verb := range []string{"show", "pause", "resume", "delete"} {
 		reply := s.handleCommand(taskCommand{ownerID: 2, chatID: 2, input: "/task " + verb + " " + task.ID})
-		if reply.err != nil || reply.text != "Задача не найдена." || !task.Enabled {
+		if reply.err != nil || reply.text != "Task not found." || !task.Enabled {
 			t.Fatalf("other owner accessed task: %s %+v", verb, reply)
 		}
 	}
@@ -89,7 +89,7 @@ func TestTaskCommandsOwnershipAndDuplicateUpdate(t *testing.T) {
 			input += " " + task.ID
 		}
 		reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: input})
-		if reply.err != nil || reply.text == "Задача не найдена." {
+		if reply.err != nil || reply.text == "Task not found." {
 			t.Fatalf("command: %s %+v", verb, reply)
 		}
 		if verb == "pause" && task.Enabled || verb == "resume" && !task.Enabled {
@@ -139,7 +139,7 @@ func TestTaskIntervalsAndHourlySummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := <-outgoing
-	if !report.report || !strings.Contains(report.text, "Выполнено: 12; норма: 9; проблемы: 3") {
+	if !report.report || !strings.Contains(report.text, "Completed: 12; healthy: 9; problems: 3") {
 		t.Fatalf("wrong report: %+v", report)
 	}
 	report.err = errors.New("delivery failed")
@@ -161,8 +161,8 @@ func TestTaskIncidentsUnknownAndRecovery(t *testing.T) {
 		status string
 		notice string
 	}{
-		{"problem", "проблема"}, {"problem", ""}, {"unknown", ""},
-		{"ok", "восстановление"}, {"ok", ""}, {"problem", "проблема"},
+		{"problem", "problem"}, {"problem", ""}, {"unknown", ""},
+		{"ok", "recovery"}, {"ok", ""}, {"problem", "problem"},
 	} {
 		task.State.PendingNotice = ""
 		if err := s.finish(taskCompletion{*task, taskOutcome{scenario.status, "test"}}); err != nil {
@@ -186,7 +186,7 @@ func TestTaskReloadPreservesRuntimeAndRejectsStaleResults(t *testing.T) {
 	}
 	job := *task
 	editTaskFile(t, s, func(file *taskFile) {
-		file.Tasks[0].Prompt = "Проверяй другой сервис"
+		file.Tasks[0].Prompt = "Check another service"
 		file.Tasks[0].State.Counts.Problem = 999
 	})
 	if err := s.reload(); err != nil {
@@ -223,7 +223,7 @@ func TestTaskCorruptFileIsNotOverwritten(t *testing.T) {
 		t.Fatal("bad file replaced valid schedules")
 	}
 	reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task delete " + s.file.Tasks[0].ID})
-	if reply.err != nil || !strings.Contains(reply.text, "некорректен") {
+	if reply.err != nil || !strings.Contains(reply.text, "invalid") {
 		t.Fatalf("corrupt file command: %+v", reply)
 	}
 	if err := b.UseTasks(s.path); err == nil {
@@ -353,7 +353,7 @@ func TestTaskCommandCheckpointSurvivesRestart(t *testing.T) {
 func TestTaskOldestDeadlineRunsFirst(t *testing.T) {
 	_, s := testTasks(t)
 	first := addTestTask(t, s, "1m", "1h")
-	reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task add 1m 1h Проверяй второй сервис"})
+	reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task add 1m 1h Check the second service"})
 	if reply.err != nil || len(s.file.Tasks) != 2 {
 		t.Fatalf("second task: %+v", reply)
 	}
@@ -390,8 +390,8 @@ func TestTaskModelDeadlineIsUnknown(t *testing.T) {
 func TestTaskLimitIncludesPausedTasksAndAllOwners(t *testing.T) {
 	_, s := testTasks(t)
 	for i := range maxScheduledTasks {
-		reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, updateID: int64(i + 1), input: "/task add 1m 1h Проверяй nginx"})
-		if reply.err != nil || !strings.Contains(reply.text, "создана") {
+		reply := s.handleCommand(taskCommand{ownerID: 1, chatID: 1, updateID: int64(i + 1), input: "/task add 1m 1h Check nginx"})
+		if reply.err != nil || !strings.Contains(reply.text, "created") {
 			t.Fatalf("task below limit rejected: %+v", reply)
 		}
 	}
@@ -413,8 +413,8 @@ func TestTaskLimitIncludesPausedTasksAndAllOwners(t *testing.T) {
 		t.Fatalf("file at the limit was rejected: %v", err)
 	}
 	for _, owner := range []int64{1, 2} {
-		reply := s.handleCommand(taskCommand{ownerID: owner, chatID: owner, input: "/task add 1m 1h Ещё одна задача"})
-		if reply.err != nil || !strings.Contains(reply.text, "лимит MVP: 5") ||
+		reply := s.handleCommand(taskCommand{ownerID: owner, chatID: owner, input: "/task add 1m 1h Another task"})
+		if reply.err != nil || !strings.Contains(reply.text, "MVP limit reached: 5") ||
 			!strings.Contains(reply.text, "/task delete <id>") || len(s.file.Tasks) != maxScheduledTasks {
 			t.Fatalf("owner %d bypassed limit: %+v", owner, reply)
 		}
@@ -424,15 +424,15 @@ func TestTaskLimitIncludesPausedTasksAndAllOwners(t *testing.T) {
 		t.Fatal("rejected additions changed persisted tasks")
 	}
 	reply = s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task list"})
-	if reply.err != nil || !strings.Contains(reply.text, id+" · пауза") {
+	if reply.err != nil || !strings.Contains(reply.text, id+" · paused") {
 		t.Fatalf("list omitted the task ID or paused state: %+v", reply)
 	}
 	reply = s.handleCommand(taskCommand{ownerID: 1, chatID: 1, input: "/task delete " + id})
 	if reply.err != nil || s.find(id) != nil {
 		t.Fatalf("delete did not free a slot: %+v", reply)
 	}
-	reply = s.handleCommand(taskCommand{ownerID: 2, chatID: 2, input: "/task add 1m 1h Новая задача"})
-	if reply.err != nil || !strings.Contains(reply.text, "создана") || len(s.file.Tasks) != maxScheduledTasks {
+	reply = s.handleCommand(taskCommand{ownerID: 2, chatID: 2, input: "/task add 1m 1h New task"})
+	if reply.err != nil || !strings.Contains(reply.text, "created") || len(s.file.Tasks) != maxScheduledTasks {
 		t.Fatalf("freed slot was unavailable: %+v", reply)
 	}
 }

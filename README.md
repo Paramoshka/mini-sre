@@ -72,7 +72,7 @@ readable only by their owner (`chmod 600 hosts.yaml keys/sre_ed25519`). If you u
 another config filename, keep that file outside Git too.
 
 ```bash
-go run ./cmd -config hosts.yaml "сколько места на web-1 в /var?"
+go run ./cmd -config hosts.yaml "how much free space is in /var on web-1?"
 go run ./cmd -config hosts.yaml
 ```
 
@@ -129,9 +129,9 @@ errors are reported explicitly. For systemd logs, omit `service` to read the
 general journal. Docker logs require a container.
 
 `get_top_processes` accepts `sort_by=memory` or `sort_by=cpu` and `limit=1..50`.
-For example, ask "кто больше всего занимает ОЗУ на web-1?" or "топ-5 процессов по
-CPU на local". Memory sorting uses RSS (resident physical memory), not virtual
-address space. RSS includes shared pages, so summing it across processes can
+For example, ask "which processes use the most memory on web-1?" or
+"top 5 processes by CPU on local". Memory sorting uses RSS (resident physical
+memory), not virtual address space. RSS includes shared pages, so summing it across processes can
 double-count memory. CPU is averaged over each process's entire lifetime and can
 exceed 100% on multiple cores; it does not measure a recent one-second interval.
 Only processes visible to the local or SSH user are included. Full command-line
@@ -227,8 +227,8 @@ bot and cancel active requests.
 Create a schedule in a personal chat:
 
 ```text
-/task add 5m 1h Проверяй nginx на web-1; проблема, если сервис не active.
-/task add 1h 6h Проверяй нагрузку на web-1; проблема, если load average за 5 минут больше 4.
+/task add 5m 1h Check nginx on web-1; report a problem if the service is not active.
+/task add 1h 6h Check load on web-1; report a problem if the 5-minute load average exceeds 4.
 ```
 
 The first interval controls checks, the second controls reports. Intervals use

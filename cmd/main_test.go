@@ -87,7 +87,7 @@ func TestConfiguredAgentUsesProbesWithoutExposingCredentials(t *testing.T) {
 		if len(results) != 8 || !strings.Contains(results["hosts"], "web-1") || !strings.Contains(results["disk"], "available=") || !strings.Contains(results["la"], "load average:") || !strings.Contains(results["journal"], "[redacted]") || !strings.Contains(results["container_logs"], "[redacted]") || !strings.Contains(results["processes"], "worker") || !strings.Contains(results["processes"], "lifetime average") {
 			t.Errorf("probe results missing: %+v", results)
 		}
-		io.WriteString(w, `{"id":"final","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Проверено"}}]}`)
+		io.WriteString(w, `{"id":"final","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Checked"}}]}`)
 	}))
 	defer server.Close()
 	client, err := agent.New(agent.Config{APIKey: "test-key", BaseURL: server.URL})
@@ -95,8 +95,8 @@ func TestConfiguredAgentUsesProbesWithoutExposingCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &session.Session{Turn: client.Chat, Tools: toolSpecs(), RunTool: toolRunner(func() config.Config { return cfg })}
-	resp, err := s.Ask(context.Background(), "Проверь local")
-	if err != nil || resp.Content != "Проверено" || requests.Load() != 2 {
+	resp, err := s.Ask(context.Background(), "Check local")
+	if err != nil || resp.Content != "Checked" || requests.Load() != 2 {
 		t.Fatalf("agent/tools flow: response=%+v err=%v requests=%d", resp, err, requests.Load())
 	}
 }

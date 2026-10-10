@@ -39,7 +39,7 @@ func (b *Bot) checkTask(ctx context.Context, task scheduledTask) taskOutcome {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if !slices.Contains(b.users(), task.OwnerID) {
-		return taskOutcome{"unknown", "Доступ владельца задачи отозван."}
+		return taskOutcome{"unknown", "Task owner access has been revoked."}
 	}
 	s := b.newSession()
 	s.SystemPrompt = session.DefaultSystemPrompt + scheduledPrompt
@@ -65,7 +65,7 @@ func (b *Bot) checkTask(ctx context.Context, task scheduledTask) taskOutcome {
 	response, err := s.Ask(ctx, task.Prompt)
 	if err != nil {
 		b.log(err)
-		return taskOutcome{"unknown", "Не удалось выполнить проверку. Подробности — в журнале агента."}
+		return taskOutcome{"unknown", "Could not run the check. See the agent log for details."}
 	}
 	var result taskOutcome
 	dec := json.NewDecoder(bytes.NewBufferString(response.Content))
@@ -73,10 +73,10 @@ func (b *Bot) checkTask(ctx context.Context, task scheduledTask) taskOutcome {
 	var extra any
 	if err := dec.Decode(&result); err != nil || dec.Decode(&extra) != io.EOF ||
 		!validTaskStatus(result.Status, false) || strings.TrimSpace(result.Summary) == "" {
-		return taskOutcome{"unknown", "Модель вернула некорректный результат проверки."}
+		return taskOutcome{"unknown", "The model returned an invalid check result."}
 	}
 	if !probeSucceeded || (probeFailed && result.Status == "ok") {
-		return taskOutcome{"unknown", "Инструменты не подтвердили результат проверки. " + result.Summary}
+		return taskOutcome{"unknown", "The tools did not confirm the check result. " + result.Summary}
 	}
 	return result
 }
@@ -104,9 +104,9 @@ func (s *taskScheduler) finish(completion taskCompletion) error {
 	}
 	status := completion.result.Status
 	if status == "problem" && task.State.Confirmed != "problem" {
-		task.State.PendingNotice = fmt.Sprintf("Задача %s: проблема\n%s\n%s", task.ID, task.Prompt, completion.result.Summary)
+		task.State.PendingNotice = fmt.Sprintf("Task %s: problem\n%s\n%s", task.ID, task.Prompt, completion.result.Summary)
 	} else if status == "ok" && task.State.Confirmed == "problem" {
-		task.State.PendingNotice = fmt.Sprintf("Задача %s: восстановление\n%s\n%s", task.ID, task.Prompt, completion.result.Summary)
+		task.State.PendingNotice = fmt.Sprintf("Task %s: recovery\n%s\n%s", task.ID, task.Prompt, completion.result.Summary)
 	}
 	if status == "ok" || status == "problem" {
 		task.State.Confirmed = status
@@ -121,7 +121,7 @@ func skipTaskIntervals(next, now time.Time, interval time.Duration, skipped int)
 
 func taskReport(task scheduledTask, end time.Time) string {
 	c := task.State.Counts
-	return fmt.Sprintf("Сводка задачи %s\n%s\nПериод: %s — %s\nВыполнено: %d; норма: %d; проблемы: %d; не удалось определить: %d.\nПрервано: %d; пропущено интервалов: %d.\nПоследний результат: %s\n%s\nБез явного критерия в тексте задачи оценка проблемы остаётся на усмотрение модели.",
+	return fmt.Sprintf("Task %s summary\n%s\nPeriod: %s — %s\nCompleted: %d; healthy: %d; problems: %d; unknown: %d.\nInterrupted: %d; skipped intervals: %d.\nLast result: %s\n%s\nWithout explicit criteria in the task prompt, the model decides what counts as a problem.",
 		task.ID, task.Prompt, task.State.PeriodStart.Format(time.RFC3339), end.Format(time.RFC3339),
 		c.OK+c.Problem+c.Unknown, c.OK, c.Problem, c.Unknown, c.Interrupted, c.Skipped,
 		task.State.LastResult.Status, task.State.LastResult.Summary)

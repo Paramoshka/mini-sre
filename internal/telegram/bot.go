@@ -177,21 +177,21 @@ func (b *Bot) handle(ctx context.Context, m *message, updateID int64) (string, e
 	input := strings.TrimSpace(m.Text)
 	if input == "/task" || strings.HasPrefix(input, "/task ") || strings.HasPrefix(input, "/task\n") || strings.HasPrefix(input, "/task\t") {
 		if b.tasks == nil {
-			return "Задачи не включены для этого процесса.", nil
+			return "Scheduled tasks are not enabled for this process.", nil
 		}
 		return b.tasks.command(ctx, m, updateID, input)
 	}
 	switch input {
 	case "/start":
-		return "Пришли запрос или перешли сообщение о проблеме. Укажи сервер и сервис; local — машина агента. /clear очищает историю. /task — регулярные задачи.", nil
+		return "Send a request or forward a problem report. Specify the host and service; local is the agent machine. /clear resets history. /task manages scheduled tasks.", nil
 	case "/clear":
 		if s := b.sessions[m.Chat.ID]; s != nil {
 			s.Reset()
 		}
-		return "История очищена.", nil
+		return "History cleared.", nil
 	}
 	if strings.HasPrefix(input, "/") {
-		return "Неизвестная команда. /start — помощь, /clear — очистить историю.", nil
+		return "Unknown command. /start — help, /clear — reset history.", nil
 	}
 	s := b.sessions[m.Chat.ID]
 	if s == nil {
@@ -205,11 +205,11 @@ func (b *Bot) handle(ctx context.Context, m *message, updateID int64) (string, e
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "Не удалось выполнить запрос. Подробности — в журнале агента.", nil
+		return "Could not complete the request. See the agent log for details.", nil
 	}
 	text := resp.Content
 	if strings.TrimSpace(text) == "" {
-		text = "Модель вернула пустой ответ. Попробуй уточнить запрос."
+		text = "The model returned an empty response. Try a more specific request."
 	}
 	return text, nil
 }

@@ -9,11 +9,11 @@ import (
 	"unicode"
 )
 
-const taskHelp = "/task add <проверка> <отчёт> <текст> — создать задачу, например:\n" +
-	"/task add 5m 1h Проверяй nginx на web-1; проблема, если сервис не active.\n" +
+const taskHelp = "/task add <check interval> <report interval> <prompt> — create a task, for example:\n" +
+	"/task add 5m 1h Check nginx on web-1; report a problem if the service is not active.\n" +
 	"/task list, /task show <id>, /task pause <id>, /task resume <id>, /task delete <id>.\n" +
-	"Лимит MVP: 5 задач на весь бот, включая задачи на паузе.\n" +
-	"Без явного критерия оценка проблемы остаётся на усмотрение модели."
+	"MVP limit: 5 tasks across the bot, including paused tasks.\n" +
+	"Without explicit criteria, the model decides what counts as a problem."
 
 type taskCommand struct {
 	ownerID  int64
@@ -49,7 +49,7 @@ func (s *taskScheduler) handleCommand(cmd taskCommand) taskCommandReply {
 	}
 	if err := s.reload(); err != nil {
 		s.bot.log(err)
-		return taskCommandReply{text: "Файл задач недоступен или некорректен. Исправь файл; он не был перезаписан."}
+		return taskCommandReply{text: "The tasks file is unavailable or invalid. Fix the file; it has not been overwritten."}
 	}
 	last := s.file.LastCommand
 	if cmd.updateID != 0 && last.UpdateID == cmd.updateID && last.OwnerID == cmd.ownerID &&
@@ -79,7 +79,7 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 			return err.Error(), false
 		}
 		if len(s.file.Tasks) >= maxScheduledTasks {
-			return fmt.Sprintf("Достигнут лимит MVP: %d задач на весь бот, включая задачи на паузе. /task list — посмотреть свои задачи, /task delete <id> — удалить задачу и освободить место.", maxScheduledTasks), false
+			return fmt.Sprintf("MVP limit reached: %d tasks across the bot, including paused tasks. /task list — view your tasks; /task delete <id> — delete a task and free a slot.", maxScheduledTasks), false
 		}
 		// Cut the four command words without changing whitespace inside the prompt.
 		prompt := cmd.input
@@ -100,7 +100,7 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 			State: taskState{NextRun: now.Add(check), NextReport: now.Add(report), PeriodStart: now},
 		}
 		s.file.Tasks = append(s.file.Tasks, task)
-		return fmt.Sprintf("Задача %s создана. Проверка каждые %s, сводка каждые %s.\n%s\nБез явного критерия оценка проблемы остаётся на усмотрение модели.", task.ID, task.Every, task.ReportEvery, task.Prompt), true
+		return fmt.Sprintf("Task %s created. Check every %s, report every %s.\n%s\nWithout explicit criteria, the model decides what counts as a problem.", task.ID, task.Every, task.ReportEvery, task.Prompt), true
 	case "list":
 		if len(parts) != 2 {
 			return taskHelp, false
@@ -108,15 +108,15 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 		var lines []string
 		for _, task := range s.file.Tasks {
 			if task.OwnerID == cmd.ownerID {
-				status := "пауза"
+				status := "paused"
 				if task.Enabled {
-					status = "включена"
+					status = "enabled"
 				}
 				lines = append(lines, fmt.Sprintf("%s · %s · %s / %s\n%s", task.ID, status, task.Every, task.ReportEvery, task.Prompt))
 			}
 		}
 		if len(lines) == 0 {
-			return "Задач пока нет.\n" + taskHelp, false
+			return "No tasks yet.\n" + taskHelp, false
 		}
 		return strings.Join(lines, "\n\n"), false
 	case "show", "pause", "resume", "delete":
@@ -125,10 +125,10 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 		}
 		task := s.find(parts[2])
 		if task == nil || task.OwnerID != cmd.ownerID {
-			return "Задача не найдена.", false
+			return "Task not found.", false
 		}
 		if parts[1] == "show" {
-			return fmt.Sprintf("Задача %s · включена: %t\n%s\nПроверка: %s; сводка: %s\nСледующая проверка: %s\nПоследний результат: %s\n%s", task.ID, task.Enabled, task.Prompt, task.Every, task.ReportEvery, task.State.NextRun.Format(time.RFC3339), task.State.LastResult.Status, task.State.LastResult.Summary), false
+			return fmt.Sprintf("Task %s · enabled: %t\n%s\nCheck: %s; report: %s\nNext check: %s\nLast result: %s\n%s", task.ID, task.Enabled, task.Prompt, task.Every, task.ReportEvery, task.State.NextRun.Format(time.RFC3339), task.State.LastResult.Status, task.State.LastResult.Summary), false
 		}
 		s.revision++
 		task.revision = s.revision
@@ -136,16 +136,16 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 		task.State.PendingNotice = ""
 		if parts[1] == "delete" {
 			s.file.Tasks = slices.DeleteFunc(s.file.Tasks, func(t *scheduledTask) bool { return t.ID == task.ID })
-			return "Задача удалена.", true
+			return "Task deleted.", true
 		}
 		task.Enabled = parts[1] == "resume"
 		if task.Enabled {
 			check, report, _ := taskIntervals(task.Every, task.ReportEvery)
 			task.State.NextRun = s.now().UTC().Add(check)
 			task.State.NextReport = s.now().UTC().Add(report)
-			return "Задача возобновлена.", true
+			return "Task resumed.", true
 		}
-		return "Задача на паузе.", true
+		return "Task paused.", true
 	default:
 		return taskHelp, false
 	}

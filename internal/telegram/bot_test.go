@@ -230,7 +230,7 @@ func TestWebhookAndShutdown(t *testing.T) {
 }
 
 func TestReplySplitting(t *testing.T) {
-	text := strings.Repeat("Привет🙂", 1800)
+	text := strings.Repeat("Hello🙂", 1800)
 	parts := splitText(text)
 	if len(parts) < 2 || strings.Join(parts, "") != text {
 		t.Fatal("split lost text")
@@ -265,7 +265,7 @@ func TestSendFormattedReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	bot.baseURL = server.URL
-	if err := bot.process(context.Background(), update{ID: bot.offset, Message: privateMessage(t, 1, "Как проверить место?")}); err != nil {
+	if err := bot.process(context.Background(), update{ID: bot.offset, Message: privateMessage(t, 1, "How can I check disk space?")}); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()

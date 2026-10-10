@@ -105,8 +105,8 @@ func TestTaskPollingKeepsChatAvailableAndSendsSummary(t *testing.T) {
 	for !incident || !report {
 		select {
 		case text := <-sent:
-			incident = incident || strings.Contains(text, ": проблема")
-			report = report || strings.Contains(text, "Выполнено: 1; норма: 0; проблемы: 1")
+			incident = incident || strings.Contains(text, ": problem")
+			report = report || strings.Contains(text, "Completed: 1; healthy: 0; problems: 1")
 		case <-ctx.Done():
 			t.Fatal("incident or summary was not delivered")
 		}

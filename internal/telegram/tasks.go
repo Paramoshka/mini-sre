@@ -109,7 +109,7 @@ func (b *Bot) UseTasks(path string) error {
 		task.revision = s.revision
 		if task.State.Running {
 			task.State.Running = false
-			task.State.LastResult = taskOutcome{"unknown", "Предыдущая проверка была прервана."}
+			task.State.LastResult = taskOutcome{"unknown", "The previous check was interrupted."}
 			task.State.Counts.Interrupted++
 			if task.State.NextRun.After(now) {
 				task.State.NextRun = now
@@ -163,11 +163,11 @@ func decodeTaskFile(data []byte) (taskFile, error) {
 func taskIntervals(every, report string) (time.Duration, time.Duration, error) {
 	check, err := time.ParseDuration(every)
 	if err != nil || check < time.Minute {
-		return 0, 0, errors.New("Интервал проверки должен быть не меньше минуты: например 5m или 1h.")
+		return 0, 0, errors.New("The check interval must be at least one minute, for example 5m or 1h.")
 	}
 	reports, err := time.ParseDuration(report)
 	if err != nil || reports < check {
-		return 0, 0, errors.New("Интервал отчёта должен быть не меньше интервала проверки.")
+		return 0, 0, errors.New("The report interval must be at least the check interval.")
 	}
 	return check, reports, nil
 }

@@ -82,6 +82,10 @@ func TestSSHCommands(t *testing.T) {
 					t.Fatalf("local/SSH metrics: %+v, %v", remote, err)
 				}
 			}
+			processes, err := r.Run(context.Background(), "web", "ps", "-eo", "pid,user,pcpu,pmem,rss,comm", "--sort=-rss", "--cols=256")
+			if err != nil || !strings.Contains(processes.Stdout, "PID") || !strings.Contains(processes.Stdout, "COMMAND") {
+				t.Fatalf("SSH process report: %+v, %v", processes, err)
+			}
 			result, err := r.Run(context.Background(), "web", "sh", "-c", "printf failure >&2; exit 7")
 			if err == nil || result.Stderr != "failure" {
 				t.Fatalf("SSH exit failure: %+v, %v", result, err)

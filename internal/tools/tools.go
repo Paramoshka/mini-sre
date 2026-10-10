@@ -40,6 +40,11 @@ func Specs() []Spec {
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"host_id":{"type":"string","description":"Host ID from list_hosts; default local."},"path":{"type":"string","description":"Filesystem path to inspect; default /."}},"additionalProperties":false}`),
 		},
 		{
+			Name:        "get_top_processes",
+			Description: "List visible processes sorted by memory (RSS) or CPU, descending. Shows PID, user, CPU%, MEM%, RSS in KiB and executable name, without command-line arguments. CPU% is a lifetime average, not an interval measurement, and can exceed 100% on multiple cores. Defaults: host_id=local, sort_by=memory, limit=10.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"host_id":{"type":"string","description":"Host ID from list_hosts; default local."},"sort_by":{"type":"string","enum":["memory","cpu"],"description":"Sort descending by resident memory or lifetime-average CPU; default memory."},"limit":{"type":"integer","minimum":1,"maximum":50,"description":"Maximum number of processes; default 10."}},"additionalProperties":false}`),
+		},
+		{
 			Name: "get_service_status", Description: "Read systemd service or Docker container state. backend defaults to systemd; scope defaults to system. Use scope=user for user systemd services. Does not restart services.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{"host_id":{"type":"string"},"service":{"type":"string","description":"Systemd service name or Docker container name/ID."},"backend":{"type":"string","enum":["systemd","docker"]},"scope":{"type":"string","enum":["system","user"],"description":"Systemd only: system (default) or the executing user's service manager."}},"required":["service"],"additionalProperties":false}`),
 		},
@@ -68,6 +73,8 @@ func Registry(runner *remote.Runner) map[string]Func {
 				out, err = t.LoadAverage(ctx, args.HostID)
 			case "get_disk_usage":
 				out, err = t.DiskUsage(ctx, args.HostID, args.Path)
+			case "get_top_processes":
+				out, err = t.TopProcesses(ctx, args)
 			case "get_service_status":
 				out, err = t.ServiceStatus(ctx, args.HostID, args.ServiceTarget)
 			case "get_service_logs":
@@ -88,8 +95,10 @@ type toolArgs struct {
 	HostID string `json:"host_id"`
 	Path   string `json:"path"`
 	ServiceTarget
-	Lines        *int `json:"lines"`
-	SinceMinutes *int `json:"since_minutes"`
+	Lines        *int   `json:"lines"`
+	SinceMinutes *int   `json:"since_minutes"`
+	SortBy       string `json:"sort_by"`
+	Limit        *int   `json:"limit"`
 }
 
 func decodeArgs(raw json.RawMessage) (toolArgs, error) {

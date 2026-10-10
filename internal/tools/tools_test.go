@@ -144,8 +144,8 @@ func TestRegistry(t *testing.T) {
 
 func TestSpecs(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 5 {
-		t.Fatalf("Specs() = %d, want 5", len(specs))
+	if len(specs) != 6 {
+		t.Fatalf("Specs() = %d, want 6", len(specs))
 	}
 	registry := Registry(&remote.Runner{})
 	for _, spec := range specs {

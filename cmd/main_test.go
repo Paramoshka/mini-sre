@@ -29,6 +29,7 @@ func TestConfiguredAgentUsesProbesWithoutExposingCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	scripts := map[string]string{
+		"ps":         "#!/bin/sh\nprintf '%s\\n' '    PID USER %CPU %MEM RSS COMMAND' '     42 sre 99.0 2.5 102400 worker'\n",
 		"systemctl":  "#!/bin/sh\nprintf 'LoadState=loaded\\nActiveState=active\\nSubState=running\\n'\n",
 		"journalctl": "#!/bin/sh\nprintf 'app warning: test-ssh-secret\\n'\n",
 		"docker":     "#!/bin/sh\ncase \"$1\" in\ninspect) printf '{\"Status\":\"running\"}\\n';;\nlogs) printf 'container warning: test-ssh-secret\\n' >&2;;\nesac\n",
@@ -58,10 +59,10 @@ func TestConfiguredAgentUsesProbesWithoutExposingCredentials(t *testing.T) {
 					Function struct{ Name string } `json:"function"`
 				} `json:"tools"`
 			}
-			if err := json.Unmarshal(body, &req); err != nil || len(req.Tools) != 5 {
+			if err := json.Unmarshal(body, &req); err != nil || len(req.Tools) != 6 {
 				t.Errorf("tool definitions missing: %v, %d", err, len(req.Tools))
 			}
-			io.WriteString(w, `{"id":"first","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"hosts","type":"function","function":{"name":"list_hosts","arguments":"{}"}},{"id":"la","type":"function","function":{"name":"get_load_average","arguments":"{}"}},{"id":"disk","type":"function","function":{"name":"get_disk_usage","arguments":"{\"path\":\"/\"}"}},{"id":"systemd","type":"function","function":{"name":"get_service_status","arguments":"{\"service\":\"nginx\"}"}},{"id":"docker","type":"function","function":{"name":"get_service_status","arguments":"{\"service\":\"web\",\"backend\":\"docker\"}"}},{"id":"journal","type":"function","function":{"name":"get_service_logs","arguments":"{}"}},{"id":"container_logs","type":"function","function":{"name":"get_service_logs","arguments":"{\"service\":\"web\",\"backend\":\"docker\"}"}}]}}]}`)
+			io.WriteString(w, `{"id":"first","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"hosts","type":"function","function":{"name":"list_hosts","arguments":"{}"}},{"id":"la","type":"function","function":{"name":"get_load_average","arguments":"{}"}},{"id":"disk","type":"function","function":{"name":"get_disk_usage","arguments":"{\"path\":\"/\"}"}},{"id":"systemd","type":"function","function":{"name":"get_service_status","arguments":"{\"service\":\"nginx\"}"}},{"id":"docker","type":"function","function":{"name":"get_service_status","arguments":"{\"service\":\"web\",\"backend\":\"docker\"}"}},{"id":"journal","type":"function","function":{"name":"get_service_logs","arguments":"{}"}},{"id":"container_logs","type":"function","function":{"name":"get_service_logs","arguments":"{\"service\":\"web\",\"backend\":\"docker\"}"}},{"id":"processes","type":"function","function":{"name":"get_top_processes","arguments":"{\"sort_by\":\"cpu\",\"limit\":3}"}}]}}]}`)
 			return
 		}
 		var req struct {
@@ -83,7 +84,7 @@ func TestConfiguredAgentUsesProbesWithoutExposingCredentials(t *testing.T) {
 				}
 			}
 		}
-		if len(results) != 7 || !strings.Contains(results["hosts"], "web-1") || !strings.Contains(results["disk"], "available=") || !strings.Contains(results["la"], "load average:") || !strings.Contains(results["journal"], "[redacted]") || !strings.Contains(results["container_logs"], "[redacted]") {
+		if len(results) != 8 || !strings.Contains(results["hosts"], "web-1") || !strings.Contains(results["disk"], "available=") || !strings.Contains(results["la"], "load average:") || !strings.Contains(results["journal"], "[redacted]") || !strings.Contains(results["container_logs"], "[redacted]") || !strings.Contains(results["processes"], "worker") || !strings.Contains(results["processes"], "lifetime average") {
 			t.Errorf("probe results missing: %+v", results)
 		}
 		io.WriteString(w, `{"id":"final","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Проверено"}}]}`)

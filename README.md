@@ -7,6 +7,7 @@ history, and function calling.
 
 - REPL and one-shot mode, the answer is printed as it is generated;
 - read-only tools for load average, disk space, systemd/Docker status and logs;
+- top processes by resident memory or lifetime-average CPU;
 - the same probes run locally or over SSH on hosts configured in YAML;
 - a Telegram bot for personal messages and forwarded text from allowed users;
 - token and DeepSeek server cache stats after every answer;
@@ -22,6 +23,8 @@ Systemd probes need `systemctl` and `journalctl`; Docker probes need the Docker
 CLI and access to its daemon. These commands must be available in the SSH user's
 noninteractive PATH on remote hosts. Commands run as the current local or SSH
 user; the agent does not invoke `sudo`.
+
+The process probe requires `ps` from procps-ng, locally or in the SSH user's PATH.
 
 ## Usage
 
@@ -110,6 +113,7 @@ All probes except `list_hosts` accept `host_id`, defaulting to `local`.
 | `list_hosts` | none | list configured IDs and `local` |
 | `get_load_average` | none | load for 1, 5, 15 minutes and process counts |
 | `get_disk_usage` | `path`, default `/` | total, used, available bytes formatted as human-readable sizes |
+| `get_top_processes` | `sort_by`, default `memory`; `limit`, default `10` | descending ranking by RSS or lifetime-average CPU, with PID, user, CPU%, MEM%, RSS in KiB and process name |
 | `get_service_status` | required `service`; `backend`, default `systemd`; `scope`, default `system` | systemd unit state or Docker container `.State` |
 | `get_service_logs` | `service`, `backend`, `scope`, `lines`, `since_minutes` | recent journal or container logs |
 
@@ -119,6 +123,17 @@ Swarm service names. An inactive/failed unit or exited container is a valid
 status result. Missing services, unavailable commands/daemons and permission
 errors are reported explicitly. For systemd logs, omit `service` to read the
 general journal. Docker logs require a container.
+
+`get_top_processes` accepts `sort_by=memory` or `sort_by=cpu` and `limit=1..50`.
+For example, ask "кто больше всего занимает ОЗУ на web-1?" or "топ-5 процессов по
+CPU на local". Memory sorting uses RSS (resident physical memory), not virtual
+address space. RSS includes shared pages, so summing it across processes can
+double-count memory. CPU is averaged over each process's entire lifetime and can
+exceed 100% on multiple cores; it does not measure a recent one-second interval.
+Only processes visible to the local or SSH user are included. Full command-line
+arguments and environment variables are not requested. The report returns at
+most the selected number of complete rows, even if the lower-ranked `ps` output
+exceeds the executor's capture limit.
 
 For systemd, `scope` is `system` (default) or `user`. User scope selects the
 service manager and journal of the local process user or the configured SSH

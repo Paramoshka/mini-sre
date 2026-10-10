@@ -152,8 +152,12 @@ requests, including their tool calls. Histories and the local polling offset are
 not persisted across restarts. Telegram may redeliver an update if the process
 stops before acknowledging it.
 
-Telegram receives final answers, split into plain-text messages of at most 4000
-UTF-16 units. Streaming, reasoning output and token statistics remain console
+Telegram receives final answers with fenced code blocks, inline code and
+`**bold**` text converted to native Telegram entities. Command contents are
+preserved literally. Other Markdown syntax remains plain text; incomplete
+fenced blocks are kept literally. Replies are split into messages of at most
+4000 UTF-16 units and 100 entities, preferably at line boundaries, retaining
+formatting in each part. Streaming, reasoning output and token statistics remain console
 features. Network polling failures retry with a delay capped at 30 seconds;
 Telegram's longer `retry_after` is respected. Replies use at most three delivery
 attempts; delivery failures are logged and do not rerun the model. A network

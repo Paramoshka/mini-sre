@@ -53,6 +53,7 @@ func TestFormatReplyEdgeCases(t *testing.T) {
 		{"indented fence", "  ```\n  cmd\n  ```\n", "  cmd\n", []messageEntity{{Type: "pre", Length: 6}}},
 		{"CRLF", "```sh\r\ncmd\r\n```\r\n", "cmd\r\n", []messageEntity{{Type: "pre", Length: 5, Language: "sh"}}},
 		{"empty fence", "```\n```", "```\n```", nil},
+		{"blank fence", "```\n \n```", "```\n \n```", nil},
 		{"backtick in code", "``echo `whoami` ``", "echo `whoami` ", []messageEntity{{Type: "code", Length: 14}}},
 		{"code inside bold", "**Run `df` now**", "Run df now", []messageEntity{{Type: "bold", Length: 4}, {Type: "code", Offset: 4, Length: 2}, {Type: "bold", Offset: 6, Length: 4}}},
 	}

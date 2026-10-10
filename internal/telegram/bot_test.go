@@ -19,8 +19,10 @@ import (
 )
 
 type sentMessage struct {
-	ChatID int64  `json:"chat_id"`
-	Text   string `json:"text"`
+	ChatID    int64           `json:"chat_id"`
+	Text      string          `json:"text"`
+	Entities  []messageEntity `json:"entities"`
+	ParseMode string          `json:"parse_mode"`
 }
 
 func privateMessage(t *testing.T, user int64, text string) *message {
@@ -206,5 +208,61 @@ func TestReplySplitting(t *testing.T) {
 		if !utf8.ValidString(part) || len(utf16.Encode([]rune(part))) > 4000 || part == "" {
 			t.Fatal("split broke Unicode or size limit")
 		}
+	}
+}
+
+func TestSendFormattedReply(t *testing.T) {
+	var mu sync.Mutex
+	var sent []sentMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg sentMessage
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			t.Error(err)
+		}
+		mu.Lock()
+		sent = append(sent, msg)
+		mu.Unlock()
+		io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	bot, err := New("test-token", []int64{1}, func() *session.Session {
+		return &session.Session{Turn: func(context.Context, agent.Request) (*agent.Response, error) {
+			return &agent.Response{Content: "**SSH**\n```bash\necho '<tag> & 🙂'\n```\n" + strings.Repeat("`df -h`\n", 800)}, nil
+		}}
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot.baseURL = server.URL
+	if err := bot.handle(context.Background(), privateMessage(t, 1, "Как проверить место?")); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var text strings.Builder
+	code, inline := 0, 0
+	for _, msg := range sent {
+		if msg.ChatID != 1 || msg.ParseMode != "" || len(msg.Entities) > 100 || len(utf16.Encode([]rune(msg.Text))) > 4000 {
+			t.Fatalf("wrong recipient, parse mode or size: %+v", msg)
+		}
+		text.WriteString(msg.Text)
+		for _, entity := range msg.Entities {
+			content := entityText(t, messagePart{Text: msg.Text}, entity)
+			switch entity.Type {
+			case "pre":
+				code++
+				if content != "echo '<tag> & 🙂'\n" || entity.Language != "bash" {
+					t.Fatal("sent code was changed or language lost")
+				}
+			case "code":
+				inline++
+				if content != "df -h" {
+					t.Fatal("sent inline command was changed")
+				}
+			}
+		}
+	}
+	if len(sent) < 2 || code != 1 || inline != 800 || text.String() != "SSH\necho '<tag> & 🙂'\n"+strings.Repeat("df -h\n", 800) {
+		t.Fatal("actual sendMessage payload lost formatting or content")
 	}
 }

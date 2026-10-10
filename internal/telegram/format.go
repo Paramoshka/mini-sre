@@ -2,6 +2,8 @@ package telegram
 
 import "strings"
 
+const maxMessageEntities = 100
+
 type messageEntity struct {
 	Type     string `json:"type"`
 	Offset   int    `json:"offset"`
@@ -41,7 +43,7 @@ func formatReply(text string) []messagePart {
 		f.append(strings.Join(lines[i+1:end], ""), "pre", strings.TrimSpace(line[3:]))
 		i = end
 	}
-	if f.text.Len() == 0 {
+	if strings.TrimSpace(f.text.String()) == "" {
 		return splitReply(messagePart{Text: text})
 	}
 	return splitReply(messagePart{Text: f.text.String(), Entities: f.entities})
@@ -96,21 +98,44 @@ func (f *replyFormatter) inline(text string, bold bool) {
 func splitReply(reply messagePart) []messagePart {
 	var parts []messagePart
 	start := 0
-	for _, text := range splitText(reply.Text) {
-		part := messagePart{Text: text}
-		end := start + utf16Length(text)
-		for _, entity := range reply.Entities {
-			left := max(start, entity.Offset)
-			right := min(end, entity.Offset+entity.Length)
-			if left < right {
+	for _, chunk := range splitText(reply.Text) {
+		for chunk != "" {
+			part := messagePart{Text: chunk}
+			end := start + utf16Length(chunk)
+			for _, entity := range reply.Entities {
+				left := max(start, entity.Offset)
+				right := min(end, entity.Offset+entity.Length)
+				if left >= right {
+					continue
+				}
+				if len(part.Entities) == maxMessageEntities {
+					end = left
+					part.Text = chunk[:utf16ByteIndex(chunk, end-start)]
+					break
+				}
 				entity.Offset, entity.Length = left-start, right-left
 				part.Entities = append(part.Entities, entity)
 			}
+			parts = append(parts, part)
+			start = end
+			chunk = chunk[len(part.Text):]
 		}
-		parts = append(parts, part)
-		start = end
 	}
 	return parts
+}
+
+func utf16ByteIndex(text string, offset int) int {
+	units := 0
+	for i, r := range text {
+		if units == offset {
+			return i
+		}
+		units++
+		if r > 0xffff {
+			units++
+		}
+	}
+	return len(text)
 }
 
 func utf16Length(text string) int {

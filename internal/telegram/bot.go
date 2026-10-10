@@ -158,8 +158,12 @@ func (b *Bot) handle(ctx context.Context, m *message) error {
 }
 
 func (b *Bot) send(ctx context.Context, chatID int64, text string) error {
-	for _, part := range splitText(text) {
-		if err := b.callWithRetry(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": part}, nil); err != nil {
+	for _, part := range formatReply(text) {
+		params := map[string]any{"chat_id": chatID, "text": part.Text}
+		if len(part.Entities) > 0 {
+			params["entities"] = part.Entities
+		}
+		if err := b.callWithRetry(ctx, "sendMessage", params, nil); err != nil {
 			return err
 		}
 	}

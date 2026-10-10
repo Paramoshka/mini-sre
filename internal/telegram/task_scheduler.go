@@ -30,39 +30,11 @@ func (s *taskScheduler) run(ctx context.Context) error {
 	workers.Add(2)
 	go func() {
 		defer workers.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case task := <-jobs:
-				result := s.bot.checkTask(ctx, task)
-				select {
-				case completed <- taskCompletion{task, result}:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
+		s.runChecks(ctx, jobs, completed)
 	}()
 	go func() {
 		defer workers.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case delivery := <-outgoing:
-				if slices.Contains(s.bot.users(), delivery.task.OwnerID) {
-					delivery.err = s.bot.send(ctx, delivery.task.ChatID, delivery.text)
-				} else {
-					delivery.err = errors.New("tasks: delivery skipped: owner access revoked")
-				}
-				select {
-				case delivered <- delivery:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
+		s.sendNotifications(ctx, outgoing, delivered)
 	}()
 	defer func() { cancel(); workers.Wait() }()
 	tick := time.NewTicker(time.Second)
@@ -212,4 +184,40 @@ func (s *taskScheduler) dispatch(jobs chan<- scheduledTask, outgoing chan<- task
 		return nil
 	}
 	return nil
+}
+
+func (s *taskScheduler) runChecks(ctx context.Context, jobs <-chan scheduledTask, completed chan<- taskCompletion) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task := <-jobs:
+			result := s.bot.checkTask(ctx, task)
+			select {
+			case completed <- taskCompletion{task: task, result: result}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (s *taskScheduler) sendNotifications(ctx context.Context, outgoing <-chan taskDelivery, delivered chan<- taskDelivery) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case delivery := <-outgoing:
+			if slices.Contains(s.bot.users(), delivery.task.OwnerID) {
+				delivery.err = s.bot.send(ctx, delivery.task.ChatID, delivery.text)
+			} else {
+				delivery.err = errors.New("tasks: delivery skipped: owner access revoked")
+			}
+			select {
+			case delivered <- delivery:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
 }

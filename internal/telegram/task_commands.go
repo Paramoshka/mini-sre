@@ -29,7 +29,10 @@ type taskCommandReply struct {
 }
 
 func (s *taskScheduler) command(ctx context.Context, m *message, updateID int64, input string) (string, error) {
-	cmd := taskCommand{m.From.ID, m.Chat.ID, updateID, input, make(chan taskCommandReply, 1)}
+	cmd := taskCommand{
+		ownerID: m.From.ID, chatID: m.Chat.ID, updateID: updateID,
+		input: input, reply: make(chan taskCommandReply, 1),
+	}
 	select {
 	case s.commands <- cmd:
 	case <-ctx.Done():
@@ -60,7 +63,10 @@ func (s *taskScheduler) handleCommand(cmd taskCommand) taskCommandReply {
 	if !changed {
 		return taskCommandReply{text: text}
 	}
-	s.file.LastCommand = taskCommandCheckpoint{cmd.updateID, cmd.ownerID, cmd.input, text, s.now().UTC()}
+	s.file.LastCommand = taskCommandCheckpoint{
+		UpdateID: cmd.updateID, OwnerID: cmd.ownerID,
+		Input: cmd.input, Reply: text, At: s.now().UTC(),
+	}
 	return taskCommandReply{text: text, err: s.save()}
 }
 
@@ -71,54 +77,12 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 	}
 	switch parts[1] {
 	case "add":
-		if len(parts) < 5 {
-			return taskHelp, false
-		}
-		check, report, err := taskIntervals(parts[2], parts[3])
-		if err != nil {
-			return err.Error(), false
-		}
-		if len(s.file.Tasks) >= maxScheduledTasks {
-			return fmt.Sprintf("MVP limit reached: %d tasks across the bot, including paused tasks. /task list — view your tasks; /task delete <id> — delete a task and free a slot.", maxScheduledTasks), false
-		}
-		// Cut the four command words without changing whitespace inside the prompt.
-		prompt := cmd.input
-		for range 4 {
-			prompt = strings.TrimSpace(prompt)
-			index := strings.IndexFunc(prompt, unicode.IsSpace)
-			if index < 0 {
-				return taskHelp, false
-			}
-			prompt = prompt[index:]
-		}
-		prompt = strings.TrimSpace(prompt)
-		now := s.now().UTC()
-		s.revision++
-		task := &scheduledTask{
-			ID: newTaskID(), OwnerID: cmd.ownerID, ChatID: cmd.chatID, Prompt: prompt,
-			Every: parts[2], ReportEvery: parts[3], Enabled: true, revision: s.revision,
-			State: taskState{NextRun: now.Add(check), NextReport: now.Add(report), PeriodStart: now},
-		}
-		s.file.Tasks = append(s.file.Tasks, task)
-		return fmt.Sprintf("Task %s created. Check every %s, report every %s.\n%s\nWithout explicit criteria, the model decides what counts as a problem.", task.ID, task.Every, task.ReportEvery, task.Prompt), true
+		return s.addTask(cmd, parts)
 	case "list":
 		if len(parts) != 2 {
 			return taskHelp, false
 		}
-		var lines []string
-		for _, task := range s.file.Tasks {
-			if task.OwnerID == cmd.ownerID {
-				status := "paused"
-				if task.Enabled {
-					status = "enabled"
-				}
-				lines = append(lines, fmt.Sprintf("%s · %s · %s / %s\n%s", task.ID, status, task.Every, task.ReportEvery, task.Prompt))
-			}
-		}
-		if len(lines) == 0 {
-			return "No tasks yet.\n" + taskHelp, false
-		}
-		return strings.Join(lines, "\n\n"), false
+		return s.listTasks(cmd.ownerID), false
 	case "show", "pause", "resume", "delete":
 		if len(parts) != 3 {
 			return taskHelp, false
@@ -149,4 +113,55 @@ func (s *taskScheduler) editCommand(cmd taskCommand) (string, bool) {
 	default:
 		return taskHelp, false
 	}
+}
+
+func (s *taskScheduler) addTask(cmd taskCommand, parts []string) (string, bool) {
+	if len(parts) < 5 {
+		return taskHelp, false
+	}
+	checkInterval, reportInterval, err := taskIntervals(parts[2], parts[3])
+	if err != nil {
+		return err.Error(), false
+	}
+	if len(s.file.Tasks) >= maxScheduledTasks {
+		return fmt.Sprintf("MVP limit reached: %d tasks across the bot, including paused tasks. /task list — view your tasks; /task delete <id> — delete a task and free a slot.", maxScheduledTasks), false
+	}
+	// Cut the four command words without changing whitespace inside the prompt.
+	prompt := cmd.input
+	for range 4 {
+		prompt = strings.TrimSpace(prompt)
+		index := strings.IndexFunc(prompt, unicode.IsSpace)
+		if index < 0 {
+			return taskHelp, false
+		}
+		prompt = prompt[index:]
+	}
+	prompt = strings.TrimSpace(prompt)
+	now := s.now().UTC()
+	s.revision++
+	task := &scheduledTask{
+		ID: newTaskID(), OwnerID: cmd.ownerID, ChatID: cmd.chatID, Prompt: prompt,
+		Every: parts[2], ReportEvery: parts[3], Enabled: true, revision: s.revision,
+		State: taskState{NextRun: now.Add(checkInterval), NextReport: now.Add(reportInterval), PeriodStart: now},
+	}
+	s.file.Tasks = append(s.file.Tasks, task)
+	return fmt.Sprintf("Task %s created. Check every %s, report every %s.\n%s\nWithout explicit criteria, the model decides what counts as a problem.", task.ID, task.Every, task.ReportEvery, task.Prompt), true
+}
+
+func (s *taskScheduler) listTasks(ownerID int64) string {
+	var lines []string
+	for _, task := range s.file.Tasks {
+		if task.OwnerID != ownerID {
+			continue
+		}
+		status := "paused"
+		if task.Enabled {
+			status = "enabled"
+		}
+		lines = append(lines, fmt.Sprintf("%s · %s · %s / %s\n%s", task.ID, status, task.Every, task.ReportEvery, task.Prompt))
+	}
+	if len(lines) == 0 {
+		return "No tasks yet.\n" + taskHelp
+	}
+	return strings.Join(lines, "\n\n")
 }

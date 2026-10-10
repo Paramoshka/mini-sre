@@ -1,7 +1,6 @@
 package telegram
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,7 +67,7 @@ func (b *Bot) checkTask(ctx context.Context, task scheduledTask) taskOutcome {
 		return taskOutcome{"unknown", "Could not run the check. See the agent log for details."}
 	}
 	var result taskOutcome
-	dec := json.NewDecoder(bytes.NewBufferString(response.Content))
+	dec := json.NewDecoder(strings.NewReader(response.Content))
 	dec.DisallowUnknownFields()
 	var extra any
 	if err := dec.Decode(&result); err != nil || dec.Decode(&extra) != io.EOF ||
@@ -121,7 +120,12 @@ func skipTaskIntervals(next, now time.Time, interval time.Duration, skipped int)
 
 func taskReport(task scheduledTask, end time.Time) string {
 	c := task.State.Counts
-	return fmt.Sprintf("Task %s summary\n%s\nPeriod: %s — %s\nCompleted: %d; healthy: %d; problems: %d; unknown: %d.\nInterrupted: %d; skipped intervals: %d.\nLast result: %s\n%s\nWithout explicit criteria in the task prompt, the model decides what counts as a problem.",
+	return fmt.Sprintf("Task %s summary\n%s\n"+
+		"Period: %s — %s\n"+
+		"Completed: %d; healthy: %d; problems: %d; unknown: %d.\n"+
+		"Interrupted: %d; skipped intervals: %d.\n"+
+		"Last result: %s\n%s\n"+
+		"Without explicit criteria in the task prompt, the model decides what counts as a problem.",
 		task.ID, task.Prompt, task.State.PeriodStart.Format(time.RFC3339), end.Format(time.RFC3339),
 		c.OK+c.Problem+c.Unknown, c.OK, c.Problem, c.Unknown, c.Interrupted, c.Skipped,
 		task.State.LastResult.Status, task.State.LastResult.Summary)

@@ -1,5 +1,7 @@
 # mini-sre
 
+![mini-sre — on-call robot mascot](assets/readme-cover.png)
+
 A minimal SRE agent for DeepSeek (OpenAI-compatible API): a CLI chat with streaming,
 history, and function calling.
 
@@ -10,6 +12,7 @@ history, and function calling.
 - top processes by resident memory or lifetime-average CPU;
 - the same probes run locally or over SSH on hosts configured in YAML;
 - a Telegram bot for personal messages and forwarded text from allowed users;
+- persistent scheduled agent checks, incident notifications and periodic summaries;
 - token and DeepSeek server cache stats after every answer;
 - DeepSeek thinking mode (disabled by default).
 
@@ -54,6 +57,7 @@ go build -o mini-sre ./cmd
 | `-config` | empty | YAML file with SSH hosts and Telegram allowed user IDs; empty means local only |
 | `-telegram` | `false` | run the bot instead of the console; requires `-config` |
 | `-telegram-state` | XDG state directory or `~/.local/state/mini-sre/telegram.json` | JSON state file used only in Telegram mode |
+| `-telegram-tasks` | `tasks.json` beside the Telegram state file | editable scheduled tasks and execution state, Telegram mode only |
 
 The key is read from the `DEEPSEEK_API_KEY` environment variable, never from
 arguments. On startup the CLI loads `.env` from the current directory if present;
@@ -217,6 +221,87 @@ failure after Telegram accepted a reply can result in a duplicate reply.
 CLI and Telegram are independent processes sharing the same configuration and
 probe code, not the same conversation history. Send SIGINT/SIGTERM to stop the
 bot and cancel active requests.
+
+### Scheduled checks
+
+Create a schedule in a personal chat:
+
+```text
+/task add 5m 1h Проверяй nginx на web-1; проблема, если сервис не active.
+/task add 1h 6h Проверяй нагрузку на web-1; проблема, если load average за 5 минут больше 4.
+```
+
+The first interval controls checks, the second controls reports. Intervals use
+Go duration syntax (`5m`, `1h`, `24h`), must be at least one minute, and the report
+interval must be at least the check interval. New and resumed tasks first run
+after one check interval. This is an interval scheduler, not calendar cron.
+
+Use `/task list`, `/task show ID`, `/task pause ID`, `/task resume ID` and
+`/task delete ID`. Users can only manage their own tasks; `/clear` only clears
+chat history. Repeated delivery of the same mutating Telegram update does not
+repeat the command. Revoking the owner's allowlist access suspends scheduled
+checks and deliveries without deleting the task.
+
+Each check calls the model in a fresh session with the saved prompt and the
+existing diagnostic tools. The agent chooses which tools to use. It does not
+share ordinary chat history or remember previous scheduled conversations.
+There is no HTTP probe yet: the current tools inspect hosts, disks, processes,
+services and logs. Process CPU values remain lifetime averages, not recent
+interval measurements. Provide explicit criteria in the task text when exact
+thresholds matter; otherwise the model uses its judgement and reports make
+that limitation clear.
+
+Results distinguish healthy, problem and unknown. Missing diagnostic calls,
+invalid model output and execution errors are counted as unknown, rather than
+healthy checks or observed incidents. The first problem and subsequent
+transitions into a problem or back to healthy trigger immediate messages;
+unknown results do not count as recovery. Periodic reports show completed checks,
+problem counts, unknown results, interrupted runs and skipped intervals. Report
+counts are computed from saved results without another model call.
+
+Checks run one at a time in a background worker with a two-minute timeout per
+run; the ordinary chat remains available. A separate worker sends scheduled
+messages using the existing Telegram retries. If many tasks or slow model calls
+exceed available time, checks can be delayed and intervals skipped. The process
+must be running to perform checks; systemd keeps it running, but there is no
+external cron entry or service installation by the bot. Every check incurs model
+API usage.
+
+Tasks are stored separately from chat history in a versioned JSON file, by
+default `tasks.json` beside the selected `-telegram-state` file. Use
+`-telegram-tasks PATH` for a different location. Run one process per tasks file,
+and choose separate paths for separate bots. The task file and new state
+directories use the same `0600` / `0700` permissions and atomic synced writes
+as chat state.
+
+For manual edits, create a task through Telegram first, then edit `prompt`,
+`every`, `report_every` or `enabled` in its JSON entry, or remove an entry. Keep
+IDs and owners unchanged; `state` and `last_command` are maintained by the bot.
+The scheduler watches the directory (including atomic file replacements),
+debounces events for 200 ms, and rereads the file every minute as a fallback.
+Its own writes do not reset schedules or counters. Existing runtime state is
+preserved when task definitions change; results from a task changed or deleted
+while a check was running are discarded.
+
+An invalid file at startup stops the bot without overwriting it. An invalid or
+missing file during operation is logged and suspends scheduler writes and new
+checks until repaired; completed results wait in memory. Last valid schedules
+are retained. Filesystem write failures and fatal watcher errors stop the bot.
+Editors and the bot do not share a filesystem transaction: before saving the
+bot rereads and reconciles changes, but simultaneous external writes can still
+race. Pause the service for bulk edits requiring strict preservation.
+
+After restart, an interrupted run is marked as interrupted and overdue tasks
+are checked once using current data. Missed historical checks are not replayed.
+State is saved before each model request and before incident delivery. Failed
+summary delivery retains counts for the next report; failed incident delivery
+is logged and the result remains in periodic statistics. Crashes and uncertain
+network delivery can still cause duplicated notifications. This is not an
+exactly-once delivery guarantee.
+
+The Telegram avatar is available at [assets/telegram-avatar.png](assets/telegram-avatar.png).
+The README cover shares the same mascot; generation prompts are recorded in
+[assets/prompts.md](assets/prompts.md). Set the bot avatar manually in Telegram.
 
 For continuous operation, `examples/mini-sre.service` is a **user** systemd unit
 expecting the binary, `.env` and `hosts.yaml` in `~/mini-sre`. Adjust its paths if

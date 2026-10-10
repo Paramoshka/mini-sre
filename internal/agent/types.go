@@ -21,14 +21,15 @@ const (
 )
 
 type Config struct {
-	APIKey      string
-	BaseURL     string
-	Model       string
-	Temperature *float64
-	MaxTokens   int
-	MaxRetries  *int
-	Thinking    ThinkingMode
-	Timeout     time.Duration
+	APIKey          string
+	BaseURL         string
+	Model           string
+	Temperature     *float64
+	MaxTokens       int
+	MaxRetries      *int
+	Thinking        ThinkingMode
+	ReasoningEffort string
+	Timeout         time.Duration
 }
 
 func (c Config) withDefaults() Config {

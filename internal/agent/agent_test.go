@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,12 +67,13 @@ const completionWithToolCalls = `{
 }`
 
 type requestBody struct {
-	Model         string        `json:"model"`
-	Messages      []messageBody `json:"messages"`
-	Temperature   *float64      `json:"temperature"`
-	MaxTokens     *int          `json:"max_tokens"`
-	Stream        bool          `json:"stream"`
-	StreamOptions struct {
+	Model           string        `json:"model"`
+	Messages        []messageBody `json:"messages"`
+	Temperature     *float64      `json:"temperature"`
+	ReasoningEffort string        `json:"reasoning_effort"`
+	MaxTokens       *int          `json:"max_tokens"`
+	Stream          bool          `json:"stream"`
+	StreamOptions   struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
 	Tools []struct {
@@ -317,6 +319,45 @@ func TestChatThinkingEnabled(t *testing.T) {
 	}
 	if got.requests[0].Thinking.Type != string(ThinkingEnabled) {
 		t.Errorf("thinking.type = %q, want %q", got.requests[0].Thinking.Type, ThinkingEnabled)
+	}
+}
+
+func TestReasoningEffortRequests(t *testing.T) {
+	for _, mode := range []ThinkingMode{ThinkingDisabled, ThinkingEnabled} {
+		for _, effort := range []string{"", "low", "high", "max"} {
+			for _, stream := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/stream=%t", mode, effort, stream), func(t *testing.T) {
+					var cap capture
+					handler := jsonHandler(&cap, completionJSON)
+					if stream {
+						handler = sseHandler(&cap, streamEvents)
+					}
+					client := newTestClient(t, Config{Thinking: mode, ReasoningEffort: effort, Temperature: floatPtr(0.2)}, handler)
+					req := Request{Messages: []Message{{Role: RoleUser, Content: "ping"}}}
+					if stream {
+						result, err := client.ChatStream(context.Background(), req)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for _, err := range result.Chunks() {
+							if err != nil {
+								t.Fatal(err)
+							}
+						}
+					} else if _, err := client.Chat(context.Background(), req); err != nil {
+						t.Fatal(err)
+					}
+					got := cap.snapshot().requests[0]
+					wantEffort := effort
+					if mode == ThinkingDisabled {
+						wantEffort = ""
+					}
+					if got.Thinking.Type != string(mode) || got.ReasoningEffort != wantEffort || got.Temperature == nil || *got.Temperature != 0.2 {
+						t.Fatalf("unexpected request settings: %+v", got)
+					}
+				})
+			}
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -26,6 +27,15 @@ func New(cfg Config) (*AgentClient, error) {
 	}
 	if *cfg.MaxRetries < 0 {
 		return nil, errors.New("agent: max retries must be >= 0")
+	}
+	if cfg.Thinking != ThinkingEnabled && cfg.Thinking != ThinkingDisabled {
+		return nil, errors.New("agent: thinking must be enabled or disabled")
+	}
+	if cfg.ReasoningEffort != "" && cfg.ReasoningEffort != "low" && cfg.ReasoningEffort != "high" && cfg.ReasoningEffort != "max" {
+		return nil, errors.New("agent: reasoning effort must be low, high or max")
+	}
+	if cfg.Temperature != nil && (math.IsNaN(*cfg.Temperature) || *cfg.Temperature < 0 || *cfg.Temperature > 2) {
+		return nil, errors.New("agent: temperature must be between 0 and 2")
 	}
 
 	client := openai.NewClient(
@@ -74,12 +84,18 @@ func (c *AgentClient) buildParams(req Request) (openai.ChatCompletionNewParams, 
 		Model:    c.cfg.Model,
 		Messages: messages,
 	}
+	if c.cfg.Thinking == ThinkingEnabled && c.cfg.ReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(c.cfg.ReasoningEffort)
+	}
 
 	temperature := c.cfg.Temperature
 	if req.Temperature != nil {
 		temperature = req.Temperature
 	}
 	if temperature != nil {
+		if math.IsNaN(*temperature) || *temperature < 0 || *temperature > 2 {
+			return openai.ChatCompletionNewParams{}, errors.New("agent: temperature must be between 0 and 2")
+		}
 		params.Temperature = openai.Float(*temperature)
 	}
 

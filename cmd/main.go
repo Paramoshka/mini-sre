@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -30,11 +31,12 @@ func main() {
 }
 
 func run() (err error) {
+	flag.String("model", "", "model ID (default deepseek-flash)")
+	flag.String("base-url", "", "API base URL (default https://api.deepseek.com)")
+	flag.Float64("temperature", -1, "sampling temperature 0..2 (-1 = server default); overrides DEEPSEEK_TEMPERATURE")
+	flag.Bool("thinking", false, "enable thinking mode; overrides DEEPSEEK_THINKING")
+	flag.String("reasoning-effort", "", "thinking effort: low, high or max; overrides DEEPSEEK_REASONING_EFFORT")
 	var (
-		model         = flag.String("model", "", "model ID (default deepseek-flash)")
-		baseURL       = flag.String("base-url", "", "API base URL (default https://api.deepseek.com)")
-		temperature   = flag.Float64("temperature", -1, "sampling temperature 0..2 (-1 = server default)")
-		thinking      = flag.Bool("thinking", false, "enable thinking mode")
 		reasoning     = flag.Bool("reasoning", false, "print reasoning content to stderr")
 		stream        = flag.Bool("stream", true, "stream tokens as they arrive")
 		configPath    = flag.String("config", "", "host and Telegram configuration YAML (default local only)")
@@ -44,18 +46,11 @@ func run() (err error) {
 	)
 	flag.Parse()
 
-	cfg := agent.Config{
-		Model:   *model,
-		BaseURL: *baseURL,
-	}
-	if *temperature >= 0 {
-		cfg.Temperature = temperature
-	}
-	if *thinking {
-		cfg.Thinking = agent.ThinkingEnabled
-	}
-
 	if err := dotenv.Load(".env"); err != nil {
+		return err
+	}
+	cfg, err := modelSettings(flag.CommandLine)
+	if err != nil {
 		return err
 	}
 	if *telegramMode && (*configPath == "" || len(flag.Args()) != 0) {
@@ -129,6 +124,41 @@ func run() (err error) {
 		return err
 	}
 	return nil
+}
+
+func modelSettings(flags *flag.FlagSet) (agent.Config, error) {
+	set := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	value := func(name, env string) string {
+		if !set[name] {
+			if text := strings.TrimSpace(os.Getenv(env)); text != "" {
+				return text
+			}
+		}
+		return flags.Lookup(name).Value.String()
+	}
+	cfg := agent.Config{
+		Model:           flags.Lookup("model").Value.String(),
+		BaseURL:         flags.Lookup("base-url").Value.String(),
+		ReasoningEffort: value("reasoning-effort", "DEEPSEEK_REASONING_EFFORT"),
+		Thinking:        agent.ThinkingDisabled,
+	}
+	thinking, err := strconv.ParseBool(value("thinking", "DEEPSEEK_THINKING"))
+	if err != nil {
+		return cfg, errors.New("DEEPSEEK_THINKING must be true or false")
+	}
+	if thinking {
+		cfg.Thinking = agent.ThinkingEnabled
+	}
+	temperature, err := strconv.ParseFloat(value("temperature", "DEEPSEEK_TEMPERATURE"), 64)
+	if err != nil {
+		return cfg, errors.New("temperature must be a number between 0 and 2")
+	}
+	if temperature == -1 && (set["temperature"] || strings.TrimSpace(os.Getenv("DEEPSEEK_TEMPERATURE")) == "") {
+		return cfg, nil
+	}
+	cfg.Temperature = &temperature
+	return cfg, nil
 }
 
 func toolSpecs() []agent.Tool {

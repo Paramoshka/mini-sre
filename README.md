@@ -52,6 +52,7 @@ go build -o mini-sre ./cmd
 | `-base-url` | `https://api.deepseek.com` | API base URL |
 | `-temperature` | server default (1.0) | 0..2; ignored in thinking mode |
 | `-thinking` | `false` | enable thinking mode |
+| `-reasoning-effort` | server default (`high` when thinking is enabled) | `low`, `high`, `max`; used only in thinking mode |
 | `-reasoning` | `false` | print `reasoning_content` to stderr |
 | `-stream` | `true` | print the answer as it is generated |
 | `-config` | empty | YAML file with SSH hosts and Telegram allowed user IDs; empty means local only |
@@ -63,6 +64,48 @@ The key is read from the `DEEPSEEK_API_KEY` environment variable, never from
 arguments. On startup the CLI loads `.env` from the current directory if present;
 real environment variables take precedence over the file. A malformed `.env`
 aborts startup.
+
+## Model settings in .env
+
+These settings apply to CLI requests, Telegram conversations and scheduled checks:
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `DEEPSEEK_THINKING` | `false` | Enable thinking with `true` |
+| `DEEPSEEK_REASONING_EFFORT` | server default (`high`) | `low`, `high` or `max`; sent only when thinking is enabled |
+| `DEEPSEEK_TEMPERATURE` | server default (`1.0`) | Number from `0` to `2`; ignored by DeepSeek in thinking mode |
+
+For Flash 4.1, use the model ID `deepseek-flash` (the application's default).
+To enable maximum reasoning effort:
+
+```dotenv
+DEEPSEEK_THINKING=true
+DEEPSEEK_REASONING_EFFORT=max
+```
+
+For more predictable answers without thinking:
+
+```dotenv
+DEEPSEEK_THINKING=false
+DEEPSEEK_TEMPERATURE=0.2
+```
+
+Explicit flags override their corresponding environment variables, including
+`-thinking=false`. `-temperature=-1` restores the server's default temperature
+even when `DEEPSEEK_TEMPERATURE` is set. Real environment variables override
+`.env`; unset or empty values use the defaults above. Invalid settings stop
+startup. Restart the bot after changing these settings.
+
+Temperature changes the randomness of token selection: lower values favor
+likely continuations and more consistent wording; higher values produce more
+varied answers. It does not set reasoning depth or guarantee factual accuracy,
+and even `0` does not guarantee identical answers. For this diagnostic assistant,
+`0.2` is a reasonable starting point without thinking. In thinking mode,
+temperature has no effect; use reasoning effort to control deliberation instead.
+Maximum effort can increase response time and token usage, so it is not a way
+to make the bot respond faster. See DeepSeek's
+[thinking mode documentation](https://api-docs.deepseek.com/guides/thinking_mode/)
+and [temperature guide](https://api-docs.deepseek.com/quick_start/parameter_settings/).
 
 ## Hosts and SSH
 
